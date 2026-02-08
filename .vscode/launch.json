@@ -2,57 +2,18 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Python Debugger: Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal"
+    },
+    {
       "name": "Python: Door Controller",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/start.py",
-      "console": "integratedTerminal",
-      "justMyCode": false,
-      "python": "${workspaceFolder}/venv/bin/python",
-      "cwd": "${workspaceFolder}",
-      "env": {
-        "PYTHONUNBUFFERED": "1"
-      }
-    },
-    {
-      "name": "Python: Current File",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${file}",
-      "console": "integratedTerminal",
-      "justMyCode": false,
-      "python": "${workspaceFolder}/venv/bin/python"
-    },
-    {
-      "name": "Python: Run Tests",
-      "type": "debugpy",
-      "request": "launch",
-      "module": "unittest",
-      "args": [
-        "discover",
-        "-s",
-        "tests",
-        "-p",
-        "test_*.py",
-        "-v"
-      ],
-      "console": "integratedTerminal",
-      "justMyCode": false,
-      "python": "${workspaceFolder}/venv/bin/python",
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "Python: Debug Test File",
-      "type": "debugpy",
-      "request": "launch",
-      "module": "unittest",
-      "args": [
-        "${file}"
-      ],
-      "console": "integratedTerminal",
-      "justMyCode": false,
-      "python": "${workspaceFolder}/venv/bin/python",
-      "cwd": "${workspaceFolder}"
+      "console": "integratedTerminal"
     }
   ]
 }

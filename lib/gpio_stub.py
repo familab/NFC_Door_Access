@@ -4,6 +4,8 @@ Provides a minimal subset of the RPi.GPIO API used by the project.
 
 # Constants
 BCM = 'BCM'
+IN = 'IN'
+OUT = 'OUT'
 LOW = 0
 HIGH = 1
 PUD_UP = 'PUD_UP'

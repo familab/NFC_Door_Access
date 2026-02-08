@@ -7,21 +7,33 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional, List
 import socket
+import json
 
 from .config import config, __version__
 from .logging_utils import (
+    logger,
     get_logger,
     get_last_google_log_success,
     get_last_badge_download,
     get_last_google_error,
-    get_log_file_size
+    get_log_file_size,
+    update_last_badge_download,
+    record_action
 )
 from .door_control import get_door_status, get_door_status_updated
+from .openapi import get_openapi_spec
+
+# Common content types
+TEXT_HTML = 'text/html'
+APPLICATION_JSON = 'application/json'
 
 # Global state for health monitoring
 _app_start_time = datetime.now()
 _last_pn532_success = None
 _last_pn532_error = None
+
+# Badge refresh callback (set by start.py)
+_badge_refresh_fn = None
 
 # Thread-safe lock for PN532 state
 _pn532_lock = threading.Lock()
@@ -53,6 +65,15 @@ def get_pn532_status():
             'last_success': _last_pn532_success,
             'last_error': _last_pn532_error
         }
+
+
+def set_badge_refresh_callback(fn):
+    """Register a callback for manual badge refresh.
+
+    The callback should return either a boolean (success) or a tuple (success, info).
+    """
+    global _badge_refresh_fn
+    _badge_refresh_fn = fn
 
 
 def format_timestamp(dt: Optional[datetime]) -> str:
@@ -143,8 +164,28 @@ def get_disk_space() -> dict:
 class HealthCheckHandler(BaseHTTPRequestHandler):
     """HTTP request handler for health check endpoint."""
 
+    def setup(self):
+        """Wrap wfile in BytesIO for test environments (mocked request)."""
+        # Call base setup to initialize rfile/wfile
+        super().setup()
+        # If the request is not a real socket (unit tests use Mock), swap wfile
+        try:
+            if not isinstance(self.request, socket.socket):
+                from io import BytesIO
+                if not hasattr(self.wfile, 'getvalue'):
+                    # Preserve original writer if needed
+                    self._original_wfile = self.wfile
+                    self.wfile = BytesIO()
+        except Exception:
+            # Best-effort only; don't fail in production
+            pass
+
     def do_GET(self):
         """Handle GET requests."""
+        try:
+            get_logger().info(f"Health server request: {self.command} {self.path} from {self.client_address}")
+        except Exception:
+            pass
         # Check Basic Auth
         if not self.check_auth():
             self.send_auth_required()
@@ -153,8 +194,67 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         # Serve health page
         if self.path == '/' or self.path == '/health':
             self.send_health_page()
-        else:
-            self.send_error(404, "Not Found")
+            return
+
+        # Serve OpenAPI JSON (Swagger) and documentation page
+        if self.path == '/openapi.json':
+            try:
+                # Log request headers and host for debugging (helps when breakpoints aren't hit)
+                host_header = self.headers.get('Host')
+                get_logger().debug(f"OpenAPI request headers: {dict(self.headers)}")
+                get_logger().debug(f"OpenAPI request Host header: {host_header!r}")
+
+                spec = get_openapi_spec(host=host_header)
+
+                # Log resolved server URL from spec for troubleshooting
+                server_url = spec.get('servers', [{}])[0].get('url')
+                get_logger().debug(f"OpenAPI generated server URL: {server_url}")
+
+                self.send_response(200)
+                self.send_header('Content-type', APPLICATION_JSON)
+                self.end_headers()
+                self.wfile.write(json.dumps(spec).encode('utf-8'))
+                return
+            except Exception as e:
+                get_logger().error(f"Failed to generate OpenAPI spec: {e}")
+                self.send_error(500, f"Failed to generate OpenAPI spec: {e}")
+                return
+
+        if self.path == '/docs':
+            # Simple Swagger UI page using CDN
+            try:
+                self.send_response(200)
+                self.send_header('Content-type', TEXT_HTML)
+                self.end_headers()
+                html = """<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Door Controller API Docs</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@4/swagger-ui.css" />
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@4/swagger-ui-bundle.js"></script>
+    <script>
+      window.onload = function() {
+        const ui = SwaggerUIBundle({
+          url: '/openapi.json',
+          dom_id: '#swagger-ui',
+          presets: [SwaggerUIBundle.presets.apis],
+          layout: 'BaseLayout'
+        });
+      };
+    </script>
+  </body>
+</html>"""
+                self.wfile.write(html.encode('utf-8'))
+                return
+            except Exception as e:
+                self.send_error(500, f"Failed to render docs: {e}")
+                return
+
+        self.send_error(404, "Not Found")
 
     def check_auth(self) -> bool:
         """
@@ -165,6 +265,10 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         """
         auth_header = self.headers.get('Authorization')
         if not auth_header:
+            try:
+                get_logger().warning("Health server auth failed: missing Authorization header")
+            except Exception:
+                pass
             return False
 
         try:
@@ -191,9 +295,73 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         """Send 401 Unauthorized response."""
         self.send_response(401)
         self.send_header('WWW-Authenticate', 'Basic realm="Door Controller"')
-        self.send_header('Content-type', 'text/html')
+        self.send_header('Content-type', TEXT_HTML)
         self.end_headers()
         self.wfile.write(b'<html><body><h1>401 Unauthorized</h1></body></html>')
+
+    def do_POST(self):
+        """Handle POST requests (used for badge refresh)."""
+        try:
+            get_logger().info(f"Health server request: {self.command} {self.path} from {self.client_address}")
+        except Exception:
+            pass
+        # Check Basic Auth
+        if not self.check_auth():
+            self.send_auth_required()
+            return
+
+        if self.path == '/api/refresh_badges':
+            # Trigger badge refresh callback if available; always return JSON
+            if _badge_refresh_fn is None:
+                get_logger().warning("Badge refresh requested but no callback is registered")
+                try:
+                    update_last_badge_download(success=False)
+                except Exception:
+                    pass
+
+                self.send_response(503)
+                self.send_header('Content-type', APPLICATION_JSON)
+                self.end_headers()
+                payload = json.dumps({'success': False, 'message': 'Badge refresh not available'})
+                self.wfile.write(payload.encode('utf-8'))
+                return
+
+            try:
+                result = _badge_refresh_fn()
+                # Allow callbacks that return (bool, info) or just bool
+                if isinstance(result, tuple):
+                    success = bool(result[0])
+                    info = str(result[1]) if len(result) > 1 else ''
+                else:
+                    success = bool(result)
+                    info = ''
+
+                update_last_badge_download(success=success)
+                record_action('Manual Badge Refresh', status='Success' if success else 'Failure')
+
+                status_code = 200 if success else 500
+                self.send_response(status_code)
+                self.send_header('Content-type', APPLICATION_JSON)
+                self.end_headers()
+                payload = json.dumps({'success': success, 'message': info})
+                self.wfile.write(payload.encode('utf-8'))
+                return
+
+            except Exception as e:
+                get_logger().error(f"Badge refresh failed: {e}")
+                try:
+                    update_last_badge_download(success=False)
+                except Exception:
+                    pass
+
+                self.send_response(500)
+                self.send_header('Content-type', APPLICATION_JSON)
+                self.end_headers()
+                payload = json.dumps({'success': False, 'message': str(e)})
+                self.wfile.write(payload.encode('utf-8'))
+                return
+
+        self.send_error(404, "Not Found")
 
     def send_health_page(self):
         """Generate and send health check page."""
@@ -251,13 +419,17 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         .status-warning {{ color: #dcdcaa; font-weight: bold; }}
         .status-error {{ color: #f48771; font-weight: bold; }}
         .timestamp {{ color: #9cdcfe; }}
+        .toast {{ position: fixed; right: 20px; bottom: 20px; background: #333; color: #fff; padding: 10px 14px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.5); display: none; z-index: 9999; }}
+        .toast.success {{ background: #4ec9b0; color: #1e1e1e; }}
+        .toast.error {{ background: #f48771; }}
     </style>
 </head>
 <body>
     <h1>Door Controller Health Status</h1>
     <p class="timestamp">Version: {__version__}</p>
     <p class="timestamp">Generated: {format_timestamp(datetime.now())}</p>
-    <p class="timestamp">{refresh_html}</p>
+    <p class="timestamp">{refresh_html} &nbsp; <button id="refreshBtn" style="background:#4ec9b0;color:#1e1e1e;padding:6px;border:none;border-radius:4px;cursor:pointer;">Refresh Badge List</button></p>
+    <div id="toast" class="toast"></div>
     <p class="timestamp">Machine: {socket.gethostname()}</p>
     <p class="timestamp">Local IPs: {', '.join(get_local_ips()) or 'None'}</p>
     <table>
@@ -325,6 +497,56 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
                 }}
             }}, 1000);
         }}
+
+        // Badge refresh button - uses AJAX and shows toast notifications
+        const refreshBtn = document.getElementById('refreshBtn');
+        const toastEl = document.getElementById('toast');
+
+        function showToast(message, kind='success', timeout=4000) {{
+            if (!toastEl) return;
+            toastEl.textContent = message;
+            toastEl.className = 'toast ' + (kind === 'success' ? 'success' : 'error');
+            toastEl.style.display = 'block';
+            setTimeout(function() {{ toastEl.style.display = 'none'; }}, timeout);
+        }}
+
+        async function doRefresh() {{
+            if (!refreshBtn) return;
+            const original = refreshBtn.textContent;
+            refreshBtn.disabled = true;
+            refreshBtn.textContent = 'Refreshing...';
+
+            try {{
+                const resp = await fetch('/api/refresh_badges', {{ method: 'POST', headers: {{ 'X-Requested-With': 'XMLHttpRequest' }}, redirect: 'manual' }});
+
+                // Prefer JSON response
+                const ct = resp.headers.get('Content-Type') || '';
+                if (ct.includes('application/json')) {{
+                    const j = await resp.json();
+                    if (resp.ok) {{
+                        showToast(j.message || 'Badge list refreshed', 'success');
+                    }} else {{
+                        showToast(j.message || 'Badge refresh failed', 'error');
+                    }}
+                }} else if (resp.status >= 200 && resp.status < 400) {{
+                    showToast('Badge list refreshed', 'success');
+                }} else {{
+                    const txt = await resp.text();
+                    showToast(txt || ('Error: ' + resp.status), 'error');
+                }}
+            }} catch (e) {{
+                showToast('Network error: ' + e.message, 'error');
+            }} finally {{
+                if (refreshBtn) {{ refreshBtn.disabled = false; refreshBtn.textContent = original; }}
+            }}
+        }}
+
+        if (refreshBtn) {{
+            refreshBtn.addEventListener('click', function (e) {{
+                e.preventDefault();
+                doRefresh();
+            }});
+        }}
     }})();
     </script>
 </body>
@@ -338,7 +560,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         """Override to use our logger instead of stderr."""
-        get_logger().debug(f"Health server: {format % args}")
+        get_logger().info(f"Health server: {format % args}")
 
 
 class HealthServer:
@@ -354,13 +576,16 @@ class HealthServer:
         self.port = port or config["HEALTH_SERVER_PORT"]
         self.server = None
         self.thread = None
+        self.running = False
         self.logger = get_logger()
 
     def start(self):
         """Start the health server in a background daemon thread."""
-        if self.thread and self.thread.is_alive():
+        if self.running:
             self.logger.warning("Health server already running")
             return
+
+        self.running = True
 
         def run_server():
             try:
@@ -369,14 +594,62 @@ class HealthServer:
                 self.server.serve_forever()
             except Exception as e:
                 self.logger.error(f"Health server error: {e}")
+            finally:
+                self.running = False
 
         self.thread = threading.Thread(target=run_server, daemon=True)
         self.thread.start()
         self.logger.info("Health server thread started")
 
     def stop(self):
-        """Stop the health server."""
+        """Stop the health server gracefully."""
+        if not self.running:
+            return
+
+        self.logger.info("Stopping health server")
+        self.running = False
+
         if self.server:
-            self.logger.info("Stopping health server")
-            self.server.shutdown()
-            self.server = None
+            try:
+                self.server.shutdown()
+                self.server.server_close()
+            except Exception as e:
+                self.logger.warning(f"Error shutting down server: {e}")
+
+        # Join the serving thread to ensure clean shutdown
+        if self.thread:
+            try:
+                self.thread.join(timeout=3)
+            except Exception as e:
+                self.logger.warning(f"Health server thread did not exit cleanly: {e}")
+
+        self.server = None
+        self.thread = None
+        self.logger.info("Health server stopped")
+
+
+# Global health server instance
+_health_server = None
+
+
+def start_health_server(port: Optional[int] = None):
+    """
+    Start the global health server instance.
+
+    Args:
+        port: Port to listen on (overrides config if provided)
+    """
+    global _health_server
+
+    if _health_server is None:
+        _health_server = HealthServer(port=port)
+
+    _health_server.start()
+
+
+def stop_health_server():
+    """Stop the global health server instance."""
+    global _health_server
+
+    if _health_server:
+        _health_server.stop()

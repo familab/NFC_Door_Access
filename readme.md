@@ -2,6 +2,34 @@
 
 Python 3 Raspberry Pi Zero RFID door access control system with cloud-based badge management, health monitoring, and robust logging.
 
+## Table of Contents
+- [Features](#features)
+- [Hardware Requirements](#hardware-requirements)
+- [GPIO Pin Configuration](#gpio-pin-configuration)
+- [Installation](#installation)
+  - [Clone the Repository](#1-clone-the-repository)
+  - [Set Up Python Virtual Environment](#2-set-up-python-virtual-environment)
+  - [Install Dependencies](#3-install-dependencies)
+  - [Configure Google Sheets API](#4-configure-google-sheets-api)
+  - [Create Google Sheets](#5-create-google-sheets)
+  - [Configure Application](#6-configure-application)
+- [Running the Application](#running-the-application)
+  - [Manual Execution](#manual-execution)
+  - [Systemd Service (Production)](#systemd-service-production)
+- [Health Monitoring](#health-monitoring)
+- [Logging System](#logging-system)
+- [Systemd Watchdog](#systemd-watchdog)
+- [Testing](#testing)
+- [Continuous Integration](#continuous-integration)
+- [Deployment (production)](#deployment-production)
+- [Additional Documentation](#additional-documentation)
+- [Configuration Options](#configuration-options)
+- [Architecture](#architecture)
+- [Troubleshooting](#troubleshooting)
+- [Security Considerations](#security-considerations)
+- [License](#license)
+- [Support](#support)
+
 ## Features
 
 - **NFC/RFID Badge Authentication**: PN532-based badge reader with Google Sheets integration
@@ -82,13 +110,24 @@ export DOOR_HEALTH_PASSWORD=changeme
 
 You can run the application locally on Windows for development without GPIO/PN532 hardware. The `start.py` script will automatically fall back to lightweight stubs if the hardware libraries are not available.
 
-Recommended (optional): install a GPIO emulator package so code that imports `RPi.GPIO` still works:
+Recommended (optional): install a GPIO emulator package so code that imports `RPi.GPIO` still works.
+
+Note: there is no single canonical emulator package on PyPI — names vary. The project includes local stubs (`lib/gpio_stub.py` and `lib/pn532_stub.py`) which are used automatically when real hardware packages are missing.
+
+If you want to try an emulator, these are common candidates (may or may not exist on PyPI):
 
 ```bash
-pip install "RPi.GPIO-emulator"
+pip install fake-rpi      # or
+pip install fake_rpi
 ```
 
-If `RPi.GPIO` is not present, the project uses a local stub (`lib/gpio_stub.py`) and a PN532 stub (`lib/pn532_stub.py`) so you can run `python start.py` for UI/logic development and debugging.
+If you prefer the convenience script, use:
+
+```powershell
+.\scripts\run_dev.ps1 -Install
+```
+
+The script will install a Windows-friendly subset (`requirements-windows.txt`) and will also try installing common emulator packages; if none are available it will fall back to the included stubs.
 
 Development helper scripts:
 
@@ -112,13 +151,13 @@ python3 start.py
 1. Copy the service file:
 
 ```bash
-sudo cp door.service /etc/systemd/system/
+sudo cp door-app.service /etc/systemd/system/
 ```
 
 2. Edit service file paths:
 
 ```bash
-sudo nano /etc/systemd/system/door.service
+sudo nano /etc/systemd/system/door-app.service
 ```
 
 Update `WorkingDirectory` and `ExecStart` paths to match your installation.
@@ -127,20 +166,20 @@ Update `WorkingDirectory` and `ExecStart` paths to match your installation.
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable door.service
-sudo systemctl start door.service
+sudo systemctl enable door-app.service
+sudo systemctl start door-app.service
 ```
 
 4. Check status:
 
 ```bash
-sudo systemctl status door.service
+sudo systemctl status door-app.service
 ```
 
 5. View logs:
 
 ```bash
-sudo journalctl -u door.service -f
+sudo journalctl -u door-app.service -f
 ```
 
 ## Health Monitoring
@@ -152,6 +191,14 @@ http://<raspberry-pi-ip>:8080/health
 ```
 
 **Default credentials**: `admin` / `changeme` (change in config!)
+
+**API Documentation (Swagger UI)**: An interactive API documentation (Swagger UI) is served at:
+
+```
+http://<raspberry-pi-ip>:8080/docs
+```
+
+The raw OpenAPI JSON spec is available at `/openapi.json` (e.g., `http://<raspberry-pi-ip>:8080/openapi.json`). Access to the API docs is protected by the same Basic Auth credentials as the health page.
 
 ### Health Page Information
 
@@ -236,6 +283,15 @@ Tests run on Python 3.9, 3.10, and 3.11.
 
 This repository includes a deployment workflow that builds a ZIP artifact and deploys it to a self-hosted production agent.
 
+## Additional Documentation
+
+- [Optimizations](optimizations.md) — Performance and power optimizations for devices (Wi‑Fi power saving, etc.)
+- [Quick Reference](QUICK_REFERENCE.md) — Short commands and common operations
+- [Data Schema](data-schema.md) — Google Sheets structure and expected formats (badge list and access log)
+- **API Docs** (`/docs`) — Interactive Swagger UI for exploring the HTTP API (OpenAPI JSON at `/openapi.json`)
+
+
+
 Required repository secrets (set under Settings → Secrets):
 
 - `CREDS_JSON` — (optional) the full Google Service Account JSON content (will be written to `creds.json` on the target host)
@@ -251,7 +307,7 @@ Protection and approvals:
 Behavior of the deployment workflow:
 
 - Job 1 (`build_package`) creates a ZIP containing `README.md`, all `*.md` files, `*.service` files, `version*.txt`, `main.py`, the `lib/` package, and `requirements.txt`.
-- Job 2 (`deploy`) runs on a **self-hosted** runner (an agent you own), downloads the ZIP, extracts it to `DEPLOY_DIR` (default `/opt/door`), writes the `creds.json` file if `CREDS_JSON` is provided, creates a systemd drop-in to export `DOOR_CREDS_FILE`, `DOOR_HEALTH_USERNAME`, and `DOOR_HEALTH_PASSWORD` into the service environment, then restarts `door.service`.
+- Job 2 (`deploy`) runs on a **self-hosted** runner (an agent you own), downloads the ZIP, extracts it to `DEPLOY_DIR` (default `/opt/door`), writes the `creds.json` file if `CREDS_JSON` is provided, creates a systemd drop-in to export `DOOR_CREDS_FILE`, `DOOR_HEALTH_USERNAME`, and `DOOR_HEALTH_PASSWORD` into the service environment, then restarts `door-app.service`.
 
 Notes & recommended follow-ups:
 
@@ -310,10 +366,10 @@ Create `config.json` to override defaults:
 
 ```bash
 # Check service status
-sudo systemctl status door.service
+sudo systemctl status door-app.service
 
 # View detailed logs
-sudo journalctl -u door.service -n 50
+sudo journalctl -u door-app.service -n 50
 ```
 
 ### GPIO permissions
@@ -366,6 +422,6 @@ sudo i2cdetect -y 1
 [Your Support Information Here]
 
 ## check service
-* systemctl cat door.service
+* systemctl cat door-app.service
 * systemctl --type=service --state=running
 

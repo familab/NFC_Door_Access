@@ -11,7 +11,10 @@ Group=gpio
 WorkingDirectory=/home/pi/badge_scanner
 Environment=PYTHONUNBUFFERED=1
 Environment=DOOR_HEALTH_PORT=8080
-ExecStartPre=/bin/sh -c 'echo "0" > /tmp/door_controller_watchdog.txt'
+# Ensure /tmp exists and write initial watchdog heartbeat (tolerate failure)
+ExecStartPre=/bin/sh -c 'mkdir -p /tmp && echo "0" > /tmp/door_controller_watchdog.txt || true'
+# Verify Python in virtualenv is executable
+ExecStartPre=/bin/sh -c 'test -x /home/pi/badge_scanner/venv/bin/python3 || (echo "Missing venv python" >&2; exit 1)'
 ExecStart=/home/pi/badge_scanner/venv/bin/python3 /home/pi/badge_scanner/start.py
 StandardOutput=journal
 StandardError=journal
@@ -24,7 +27,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/tmp /home/pi/badge_scanner
+ReadWritePaths=/tmp /home/pi /home/pi/badge_scanner
 SupplementaryGroups=i2c
 
 # Resource limits

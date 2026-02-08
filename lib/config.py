@@ -24,7 +24,7 @@ DEFAULT_CONFIG = {
     # File paths
     "CSV_FILE": "google_sheet_data.csv",
     "CREDS_FILE": "creds.json",
-    "LOG_FILE": "door_controller.log",
+    "LOG_FILE": "logs/door_controller.txt",
     "WATCHDOG_FILE": "/tmp/door_controller_watchdog.txt",
 
     # Google Sheets
@@ -38,6 +38,7 @@ DEFAULT_CONFIG = {
     "HEALTH_REFRESH_INTERVAL": 30,
 
     # Logging
+    "LOG_LEVEL": "INFO",
     "LOG_RETENTION_DAYS": 7,
     "LOG_MAX_BYTES": 10 * 1024 * 1024,  # 10MB
 }

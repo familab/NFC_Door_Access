@@ -98,11 +98,19 @@ class TestHealthCheckHandler(unittest.TestCase):
             BytesIO()
         ])
 
-        handler = health_server.HealthCheckHandler(
-            self.mock_request,
-            self.mock_client_address,
-            self.mock_server
-        )
+        # Instantiate handler without invoking automatic handling flow.
+        handler = object.__new__(health_server.HealthCheckHandler)
+        handler.request = self.mock_request
+        handler.client_address = self.mock_client_address
+        handler.server = self.mock_server
+        # Initialize rfile/wfile via setup (will wrap wfile for tests)
+        handler.setup()
+
+        # Set path and requestline so methods and logging work as expected
+        handler.path = path
+        handler.requestline = f'GET {path} HTTP/1.1'
+        handler.command = 'GET'
+        handler.request_version = 'HTTP/1.1'
 
         # Mock headers
         handler.headers = {}
@@ -136,6 +144,55 @@ class TestHealthCheckHandler(unittest.TestCase):
         """Test authentication failure with invalid format."""
         handler = self._create_handler(auth_header='Invalid format')
         self.assertFalse(handler.check_auth())
+
+    def test_refresh_badges_no_callback(self):
+        """Requesting badge refresh without callback should result in a 503 and mark download as failed."""
+        credentials = base64.b64encode(b'testuser:testpass').decode('ascii')
+        auth_header = f'Basic {credentials}'
+
+        handler = self._create_handler(auth_header=auth_header)
+        handler.path = '/api/refresh_badges'
+
+        with patch('lib.health_server.update_last_badge_download') as upd_mock:
+            # Ensure no callback is registered
+            health_server._badge_refresh_fn = None
+            handler.do_POST()
+            upd_mock.assert_called_with(success=False)
+
+    def test_refresh_badges_calls_callback_success(self):
+        """A successful badge refresh should call the registered callback and update timestamps."""
+        credentials = base64.b64encode(b'testuser:testpass').decode('ascii')
+        auth_header = f'Basic {credentials}'
+
+        handler = self._create_handler(auth_header=auth_header)
+        handler.path = '/api/refresh_badges'
+
+        mock_cb = Mock(return_value=(True, '5 badges'))
+        health_server.set_badge_refresh_callback(mock_cb)
+
+        with patch('lib.health_server.update_last_badge_download') as upd_mock, patch('lib.health_server.record_action') as rec_mock:
+            handler.do_POST()
+            mock_cb.assert_called_once()
+            upd_mock.assert_called_with(success=True)
+            rec_mock.assert_called()
+
+    def test_openapi_and_docs_authenticated(self):
+        """Authenticated requests to /openapi.json and /docs should succeed and return JSON/HTML respectively."""
+        credentials = base64.b64encode(b'testuser:testpass').decode('ascii')
+        auth_header = f'Basic {credentials}'
+
+        # Test OpenAPI JSON
+        handler = self._create_handler(auth_header=auth_header, path='/openapi.json')
+        handler.do_GET()
+        body = handler.wfile.getvalue()
+        self.assertIn(b'"paths"', body)
+
+        # Test Docs HTML
+        handler2 = self._create_handler(auth_header=auth_header, path='/docs')
+        handler2.do_GET()
+        body2 = handler2.wfile.getvalue()
+        self.assertIn(b'SwaggerUIBundle', body2)
+
 
 
 class TestHealthServer(unittest.TestCase):
@@ -186,6 +243,26 @@ class TestHealthServer(unittest.TestCase):
 
         server2 = health_server.HealthServer()
         self.assertEqual(server2.port, 8888)  # From mocked config
+
+    @patch('lib.health_server.HTTPServer')
+    def test_global_start_stop(self, mock_http_server):
+        """Test starting and stopping the global health server via helpers."""
+        # Make the mocked server block briefly so the thread stays alive during the check
+        mock_http_server.return_value.serve_forever = lambda: time.sleep(0.1)
+
+        # Ensure global is reset
+        health_server._health_server = None
+
+        # Start global server
+        health_server.start_health_server(port=8888)
+        self.assertIsNotNone(health_server._health_server)
+        self.assertIsNotNone(health_server._health_server.thread)
+        self.assertTrue(health_server._health_server.thread.is_alive())
+
+        # Stop global server
+        health_server.stop_health_server()
+        # After stop, thread should be None
+        self.assertIsNone(health_server._health_server.thread)
 
 
 if __name__ == '__main__':

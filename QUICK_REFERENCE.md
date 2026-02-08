@@ -1,5 +1,21 @@
 # Door Controller - Quick Reference Guide
 
+## Table of Contents
+- [Quick Start](#quick-start)
+  - [Initial Setup](#1-initial-setup)
+  - [Configure Credentials](#2-configure-credentials)
+  - [Run Application](#3-run-application)
+- [Common Commands](#common-commands)
+  - [Service Management](#service-management)
+  - [Testing](#testing)
+  - [Logs](#logs)
+- [Health Monitoring](#health-monitoring)
+- [Configuration](#configuration)
+- [Troubleshooting](#troubleshooting)
+- [File Structure](#file-structure)
+- [Security Checklist](#security-checklist)
+- [Maintenance Tasks](#maintenance-tasks)
+
 ## Quick Start
 
 ### 1. Initial Setup
@@ -22,7 +38,7 @@ source venv/bin/activate
 python3 start.py
 
 # Production (systemd)
-sudo systemctl start door.service
+sudo systemctl start door-app.service
 ```
 
 ## Common Commands
@@ -30,19 +46,19 @@ sudo systemctl start door.service
 ### Service Management
 ```bash
 # Status
-sudo systemctl status door.service
+sudo systemctl status door-app.service
 
 # Start/Stop/Restart
-sudo systemctl start door.service
-sudo systemctl stop door.service
-sudo systemctl restart door.service
+sudo systemctl start door-app.service
+sudo systemctl stop door-app.service
+sudo systemctl restart door-app.service
 
 # Enable auto-start on boot
-sudo systemctl enable door.service
+sudo systemctl enable door-app.service
 
 # View logs
-sudo journalctl -u door.service -f
-sudo journalctl -u door.service -n 100
+sudo journalctl -u door-app.service -f
+sudo journalctl -u door-app.service -n 100
 ```
 
 ### Testing
@@ -66,13 +82,13 @@ sudo journalctl -u door.service -n 100
 tail -f door_controller.log
 
 # View systemd service logs
-sudo journalctl -u door.service -f
+sudo journalctl -u door-app.service -f
 
 # View last 50 lines
-sudo journalctl -u door.service -n 50
+sudo journalctl -u door-app.service -n 50
 
 # View logs since today
-sudo journalctl -u door.service --since today
+sudo journalctl -u door-app.service --since today
 ```
 
 ## Health Monitoring
@@ -93,6 +109,11 @@ Default credentials: `admin` / `changeme` (CHANGE THESE!)
 - PN532 status
 - Google Sheets errors
 - Disk space
+
+### Useful Links
+- [Optimizations](optimizations.md)
+- [Data Schema](data-schema.md)
+- [README](README.md)
 
 ## Configuration
 
@@ -123,8 +144,8 @@ export DOOR_HEALTH_PASSWORD=changeme
 ### Service Won't Start
 ```bash
 # Check status and errors
-sudo systemctl status door.service
-sudo journalctl -u door.service -n 50
+sudo systemctl status door-app.service
+sudo journalctl -u door-app.service -n 50
 
 # Check Python path
 which python3
@@ -169,7 +190,7 @@ sudo ufw status
 sudo ufw allow 8080
 
 # Check service logs
-sudo journalctl -u door.service -n 20
+sudo journalctl -u door-app.service -n 20
 ```
 
 ## File Structure
@@ -183,7 +204,7 @@ badge_scanner/
 ├── health_server.py         # Health monitoring server
 ├── watchdog.py              # Systemd watchdog
 ├── requirements.txt         # Python dependencies
-├── door.service             # Systemd service file
+├── door-app.service             # Systemd service file
 ├── creds.json              # Google credentials (secret!)
 ├── creds.sample.json       # Credentials template
 ├── tests/                   # Unit tests
