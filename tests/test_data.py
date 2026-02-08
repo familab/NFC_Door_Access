@@ -49,21 +49,46 @@ class TestGoogleSheetsData(unittest.TestCase):
         data_client = GoogleSheetsData()
         data_client._connected = True
         data_client.sheet = MagicMock()
-        data_client.sheet.col_values.return_value = ["ABC", "DEF"]
+        data_client.sheet.col_values.return_value = ["A", "B", "C", "D", "E"]
 
         with tempfile.NamedTemporaryFile(delete=False) as f:
             csv_path = f.name
 
         try:
-            success, message = data_client.refresh_badge_list_to_csv(csv_path)
+            with patch("lib.data.update_last_data_connection") as data_conn_mock:
+                success, message = data_client.refresh_badge_list_to_csv(csv_path)
+                data_conn_mock.assert_called_once()
             self.assertTrue(success)
-            self.assertIn("2 badges", message)
+            self.assertIn("5 badges", message)
 
             with open(csv_path, "r") as f:
                 contents = f.read()
 
-            self.assertIn("ABC", contents)
-            self.assertIn("DEF", contents)
+            self.assertIn("A", contents)
+            self.assertIn("E", contents)
+        finally:
+            if os.path.exists(csv_path):
+                os.unlink(csv_path)
+
+    def test_refresh_badge_list_too_few_does_not_overwrite(self):
+        data_client = GoogleSheetsData()
+        data_client._connected = True
+        data_client.sheet = MagicMock()
+        data_client.sheet.col_values.return_value = ["A", "B", "C", "D"]
+
+        with tempfile.NamedTemporaryFile(delete=False, mode="w+") as f:
+            csv_path = f.name
+            f.write("OLD\n")
+
+        try:
+            success, message = data_client.refresh_badge_list_to_csv(csv_path)
+            self.assertFalse(success)
+            self.assertIn("Only 4 badges", message)
+
+            with open(csv_path, "r") as f:
+                contents = f.read()
+
+            self.assertIn("OLD", contents)
         finally:
             if os.path.exists(csv_path):
                 os.unlink(csv_path)
@@ -73,9 +98,10 @@ class TestGoogleSheetsData(unittest.TestCase):
         data_client._connected = True
         data_client.sheet = MagicMock()
         data_client.sheet.col_values.return_value = ["ABC", "DEF"]
-
-        self.assertTrue(data_client.check_uid_in_sheet("abc"))
-        self.assertFalse(data_client.check_uid_in_sheet("zzz"))
+        with patch("lib.data.update_last_data_connection") as data_conn_mock:
+            self.assertTrue(data_client.check_uid_in_sheet("abc"))
+            self.assertFalse(data_client.check_uid_in_sheet("zzz"))
+            self.assertGreaterEqual(data_conn_mock.call_count, 1)
 
     def test_log_access_success(self):
         data_client = GoogleSheetsData()

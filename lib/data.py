@@ -2,11 +2,14 @@
 from typing import Optional, List, Tuple
 import time
 import csv
+import os
+import tempfile
 
 from .config import config
 from .logging_utils import (
     get_logger,
     update_last_badge_download,
+    update_last_data_connection,
     update_last_google_log_success,
     update_last_google_error,
 )
@@ -45,7 +48,8 @@ class GoogleSheetsData:
             self.log_sheet = client.open(self.log_sheet_name).sheet1
             self._connected = True
             get_logger().info("Google Sheets connection established")
-            update_last_badge_download(success=True)
+            update_last_data_connection()
+
             return True
         except ModuleNotFoundError as e:
             get_logger().warning(
@@ -58,7 +62,6 @@ class GoogleSheetsData:
         self.sheet = None
         self.log_sheet = None
         self._connected = False
-        update_last_badge_download(success=False)
         return False
 
     def is_connected(self) -> bool:
@@ -70,7 +73,7 @@ class GoogleSheetsData:
             raise RuntimeError("Google Sheets not connected")
         # or self.sheet.get_all_values()
         uids = [cell.strip() for cell in self.sheet.col_values(1) if cell]
-        update_last_badge_download(success=True)
+        update_last_data_connection()
 
         if normalize_lower:
             return [u.lower() for u in uids]
@@ -86,13 +89,33 @@ class GoogleSheetsData:
         try:
             uids = self.get_badge_uids(normalize_lower=False)
 
+            if len(uids) < 5:
+                get_logger().warning(
+                    f"Badge refresh rejected: only {len(uids)} entries (minimum 5 required)"
+                )
+                update_last_badge_download(success=False)
+                return False, f"Only {len(uids)} badges"
+
             try:
-                with open(csv_file, "w", newline="") as f:
-                    writer = csv.writer(f)
+                directory = os.path.dirname(csv_file) or "."
+                with tempfile.NamedTemporaryFile(
+                    mode="w", newline="", delete=False, dir=directory
+                ) as tf:
+                    writer = csv.writer(tf)
                     for u in uids:
                         writer.writerow([u])
+                    temp_path = tf.name
+
+                os.replace(temp_path, csv_file)
             except Exception as e:
                 get_logger().warning(f"Failed to write local CSV fallback: {e}")
+                update_last_badge_download(success=False)
+                try:
+                    if "temp_path" in locals() and os.path.exists(temp_path):
+                        os.unlink(temp_path)
+                except Exception:
+                    pass
+                return False, "Failed to write CSV"
 
             get_logger().info(f"Badge list refreshed: {len(uids)} entries")
             return True, f"{len(uids)} badges"

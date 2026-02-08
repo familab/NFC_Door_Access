@@ -18,6 +18,7 @@ class TestLoggingUtils(unittest.TestCase):
         logging_utils.last_google_log_success = None
         logging_utils.last_badge_download = None
         logging_utils.last_google_error = None
+        logging_utils.last_data_connection = None
         # Track temp files for cleanup after handlers are closed
         self._temp_files = []
 
@@ -85,6 +86,11 @@ class TestLoggingUtils(unittest.TestCase):
         logging_utils.update_last_google_log_success()
         timestamp1 = logging_utils.get_last_google_log_success()
         self.assertIsNotNone(timestamp1)
+
+        # Test data connection
+        logging_utils.update_last_data_connection()
+        timestamp_data = logging_utils.get_last_data_connection()
+        self.assertIsNotNone(timestamp_data)
 
         # Test badge download
         logging_utils.setup_logger()

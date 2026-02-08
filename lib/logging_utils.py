@@ -17,6 +17,7 @@ logger_lock = threading.Lock()
 last_google_log_success = None
 last_badge_download = None
 last_google_error = None
+last_data_connection = None
 
 # Thread-safe lock for timestamp updates
 timestamp_lock = threading.Lock()
@@ -137,6 +138,25 @@ def update_last_google_log_success():
         last_google_log_success = datetime.now()
 
 
+def update_last_data_connection():
+    """Update the last data connection timestamp (any data retrieval)."""
+    global last_data_connection
+    with timestamp_lock:
+        last_data_connection = datetime.now()
+
+
+def initialize_last_badge_download_from_csv():
+    """Initialize last_badge_download from CSV file mtime if available."""
+    global last_badge_download
+    try:
+        csv_path = config.get("CSV_FILE")
+        if csv_path and os.path.exists(csv_path):
+            with timestamp_lock:
+                last_badge_download = datetime.fromtimestamp(os.path.getmtime(csv_path))
+    except Exception:
+        pass
+
+
 def update_last_badge_download(success: bool = True):
     """
     Update the last badge download timestamp.
@@ -170,6 +190,12 @@ def get_last_badge_download() -> Optional[datetime]:
     """Get the timestamp of the last badge list download."""
     with timestamp_lock:
         return last_badge_download
+
+
+def get_last_data_connection() -> Optional[datetime]:
+    """Get the timestamp of the last data retrieval from any source."""
+    with timestamp_lock:
+        return last_data_connection
 
 
 def get_last_google_error() -> Optional[str]:
@@ -315,4 +341,5 @@ class DailyNamedFileHandler(logging.Handler):
 
 
 # Initialize logger at import time so other modules can use `logger` directly
+initialize_last_badge_download_from_csv()
 logger = setup_logger()

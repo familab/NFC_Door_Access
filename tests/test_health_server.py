@@ -205,6 +205,17 @@ class TestHealthCheckHandler(unittest.TestCase):
             body = handler.wfile.getvalue()
             self.assertIn(b'/tmp/test-2026-02-08.txt', body)
 
+    def test_health_page_shows_last_data_connection(self):
+        """Health page should show the last data connection timestamp."""
+        credentials = base64.b64encode(b'testuser:testpass').decode('ascii')
+        auth_header = f'Basic {credentials}'
+
+        handler = self._create_handler(auth_header=auth_header, path='/health')
+        with patch('lib.health_server.get_last_data_connection', return_value=datetime(2026, 2, 8, 1, 2, 3)):
+            handler.do_GET()
+            body = handler.wfile.getvalue()
+            self.assertIn(b'2026-02-08 01:02:03', body)
+
     def test_health_page_shows_last_50_lines(self):
         """Health page should display the most recent 50 log lines."""
         credentials = base64.b64encode(b'testuser:testpass').decode('ascii')

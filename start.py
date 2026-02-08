@@ -95,6 +95,48 @@ def _refresh_badge_list():
     """
     return data_client.refresh_badge_list_to_csv(CSV_FILE)
 
+
+def _schedule_daily_badge_refresh(stop_event: threading.Event):
+    """Refresh badge CSV on a fixed interval while the app runs."""
+    interval = int(config.get("BADGE_REFRESH_INTERVAL_SECONDS", 24 * 60 * 60))
+    if interval <= 0:
+        logger.warning("Badge refresh interval is <= 0; disabling scheduled refresh")
+        return
+
+    # Determine initial delay based on CSV mtime to avoid aggressive refresh after crashes
+    try:
+        if os.path.exists(CSV_FILE):
+            last_modified = os.path.getmtime(CSV_FILE)
+            elapsed = max(0, time.time() - last_modified)
+        else:
+            elapsed = interval + 1
+    except Exception as e:
+        logger.warning(f"Failed to read CSV mtime: {e}")
+        elapsed = interval + 1
+
+    initial_delay = max(0, interval - elapsed)
+    logger.info(
+        f"Daily badge refresh thread started (interval: {interval}s, initial delay: {int(initial_delay)}s)"
+    )
+
+    if initial_delay > 0:
+        stop_event.wait(initial_delay)
+
+    while not stop_event.is_set():
+        try:
+            success, message = data_client.refresh_badge_list_to_csv(CSV_FILE)
+            if success:
+                logger.info(f"Scheduled badge refresh completed: {message}")
+            else:
+                logger.warning(f"Scheduled badge refresh failed: {message}")
+        except Exception as e:
+            logger.warning(f"Scheduled badge refresh error: {e}")
+
+        # Wait for next interval or stop
+        stop_event.wait(interval)
+
+    logger.info("Daily badge refresh thread exiting")
+
 set_badge_refresh_callback(_refresh_badge_list)
 
 # Lock object for managing GPIO access between threads
@@ -170,10 +212,12 @@ def check_local_csv(uid):
             for row in reader:
                 if row and row[0].strip().lower() == uid.lower():
                     return True
-    except FileNotFoundError:
+    except FileNotFoundError as e:
         logger.error(f"Local CSV file '{CSV_FILE}' not found")
+        raise e
     except Exception as e:
         logger.error(f"Error reading local CSV: {e}")
+        raise e
     return False
 
 
@@ -218,24 +262,20 @@ from typing import Tuple
 
 def _check_uid_from_sources(uid_hex: str) -> Tuple[bool, str]:
     """Helper to check UID against Google Sheets or local CSV. Returns (access_granted, source)."""
-    access_granted = False
-    source = "unknown"
+    try:
+        if check_local_csv(uid_hex):
+            return True, "Local CSV"
+        return False, "Local CSV"
+    except Exception as e:
+        logger.warning(f"Local CSV lookup failed: {e}")
 
     try:
-        if data_client.is_connected():
-            if data_client.check_uid_in_sheet(uid_hex):
-                access_granted = True
-                source = "Google Sheets"
-        else:
-            raise RuntimeError("Google Sheets not connected")
+        if data_client.is_connected() and data_client.check_uid_in_sheet(uid_hex):
+            return True, "Google Sheets"
+        return False, "Google Sheets"
     except Exception as e:
-        # Any problem with Google Sheets falls back to CSV
         logger.warning(f"Google Sheets lookup failed: {e}")
-        if check_local_csv(uid_hex):
-            access_granted = True
-            source = "Local CSV"
-
-    return access_granted, source
+        return False, "Google Sheets"
 
 
 def check_rfid(stop_event: threading.Event):
@@ -301,10 +341,12 @@ def main():
         # Create separate threads for button monitoring and RFID checking
         button_thread = threading.Thread(target=monitor_buttons, args=(stop_event,), daemon=False, name="ButtonMonitor")
         rfid_thread = threading.Thread(target=check_rfid, args=(stop_event,), daemon=False, name="RFIDMonitor")
+        refresh_thread = threading.Thread(target=_schedule_daily_badge_refresh, args=(stop_event,), daemon=False, name="BadgeRefresh")
 
         # Start both threads
         button_thread.start()
         rfid_thread.start()
+        refresh_thread.start()
 
         logger.info("All systems operational")
         logger.info(f"Health page available at http://127.0.0.1:{config['HEALTH_SERVER_PORT']}/health")
@@ -348,6 +390,7 @@ def main():
         try:
             button_thread.join(timeout=3)
             rfid_thread.join(timeout=3)
+            refresh_thread.join(timeout=3)
         except Exception:
             pass
 

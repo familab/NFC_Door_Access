@@ -15,6 +15,7 @@ from .logging_utils import (
     get_logger,
     get_last_google_log_success,
     get_last_badge_download,
+    get_last_data_connection,
     get_last_google_error,
     get_log_file_size,
     get_current_log_file_path,
@@ -371,6 +372,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         door_updated = format_timestamp(get_door_status_updated())
 
         last_google_log = format_timestamp(get_last_google_log_success())
+        last_data_conn = format_timestamp(get_last_data_connection())
         last_badge_dl = format_timestamp(get_last_badge_download())
         google_error = get_last_google_error() or "None"
 
@@ -436,7 +438,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
 <body>
     <h1>Door Controller Health Status</h1>
     <p class="timestamp">Version: {__version__}</p>
-    <p class="timestamp">Generated: {format_timestamp(datetime.now())}</p>
+    <p class="timestamp">Current Date: {format_timestamp(datetime.now())}</p>
     <p class="timestamp">{refresh_html} &nbsp; <button id="refreshBtn" style="background:#4ec9b0;color:#1e1e1e;padding:6px;border:none;border-radius:4px;cursor:pointer;">Refresh Badge List</button></p>
     <div id="toast" class="toast"></div>
     <p class="timestamp">Machine: {socket.gethostname()}</p>
@@ -461,6 +463,10 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         <tr>
             <td>Last Google Sheets Log</td>
             <td>{last_google_log}</td>
+        </tr>
+        <tr>
+            <td>Last Data Connection</td>
+            <td>{last_data_conn}</td>
         </tr>
         <tr>
             <td>Last Badge Download</td>

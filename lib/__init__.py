@@ -9,9 +9,11 @@ from .logging_utils import (
     log_pn532_error,
     get_last_google_log_success,
     get_last_badge_download,
+    get_last_data_connection,
     get_last_google_error,
     get_log_file_size,
     update_last_google_error,
+    update_last_data_connection,
 )
 from .data import GoogleSheetsData
 from .door_control import DoorController, set_door_status, get_door_status, get_door_status_updated
@@ -28,9 +30,11 @@ __all__ = [
     'log_pn532_error',
     'get_last_google_log_success',
     'get_last_badge_download',
+    'get_last_data_connection',
     'get_last_google_error',
     'get_log_file_size',
     'update_last_google_error',
+    'update_last_data_connection',
     'GoogleSheetsData',
     'DoorController',
     'set_door_status',

@@ -37,6 +37,9 @@ DEFAULT_CONFIG = {
     "HEALTH_SERVER_PASSWORD": "changeme",
     "HEALTH_REFRESH_INTERVAL": 30,
 
+    # Badge refresh scheduling
+    "BADGE_REFRESH_INTERVAL_SECONDS": 24 * 60 * 60,
+
     # Logging
     "LOG_LEVEL": "INFO",
     "LOG_RETENTION_DAYS": 7,
