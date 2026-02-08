@@ -82,13 +82,24 @@ export DOOR_HEALTH_PASSWORD=changeme
 
 You can run the application locally on Windows for development without GPIO/PN532 hardware. The `start.py` script will automatically fall back to lightweight stubs if the hardware libraries are not available.
 
-Recommended (optional): install a GPIO emulator package so code that imports `RPi.GPIO` still works:
+Recommended (optional): install a GPIO emulator package so code that imports `RPi.GPIO` still works.
+
+Note: there is no single canonical emulator package on PyPI — names vary. The project includes local stubs (`lib/gpio_stub.py` and `lib/pn532_stub.py`) which are used automatically when real hardware packages are missing.
+
+If you want to try an emulator, these are common candidates (may or may not exist on PyPI):
 
 ```bash
-pip install "RPi.GPIO-emulator"
+pip install fake-rpi      # or
+pip install fake_rpi
 ```
 
-If `RPi.GPIO` is not present, the project uses a local stub (`lib/gpio_stub.py`) and a PN532 stub (`lib/pn532_stub.py`) so you can run `python start.py` for UI/logic development and debugging.
+If you prefer the convenience script, use:
+
+```powershell
+.\scripts\run_dev.ps1 -Install
+```
+
+The script will install a Windows-friendly subset (`requirements-windows.txt`) and will also try installing common emulator packages; if none are available it will fall back to the included stubs.
 
 Development helper scripts:
 
@@ -112,13 +123,13 @@ python3 start.py
 1. Copy the service file:
 
 ```bash
-sudo cp door.service /etc/systemd/system/
+sudo cp door-app.service /etc/systemd/system/
 ```
 
 2. Edit service file paths:
 
 ```bash
-sudo nano /etc/systemd/system/door.service
+sudo nano /etc/systemd/system/door-app.service
 ```
 
 Update `WorkingDirectory` and `ExecStart` paths to match your installation.
@@ -127,20 +138,20 @@ Update `WorkingDirectory` and `ExecStart` paths to match your installation.
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable door.service
-sudo systemctl start door.service
+sudo systemctl enable door-app.service
+sudo systemctl start door-app.service
 ```
 
 4. Check status:
 
 ```bash
-sudo systemctl status door.service
+sudo systemctl status door-app.service
 ```
 
 5. View logs:
 
 ```bash
-sudo journalctl -u door.service -f
+sudo journalctl -u door-app.service -f
 ```
 
 ## Health Monitoring
@@ -251,7 +262,7 @@ Protection and approvals:
 Behavior of the deployment workflow:
 
 - Job 1 (`build_package`) creates a ZIP containing `README.md`, all `*.md` files, `*.service` files, `version*.txt`, `main.py`, the `lib/` package, and `requirements.txt`.
-- Job 2 (`deploy`) runs on a **self-hosted** runner (an agent you own), downloads the ZIP, extracts it to `DEPLOY_DIR` (default `/opt/door`), writes the `creds.json` file if `CREDS_JSON` is provided, creates a systemd drop-in to export `DOOR_CREDS_FILE`, `DOOR_HEALTH_USERNAME`, and `DOOR_HEALTH_PASSWORD` into the service environment, then restarts `door.service`.
+- Job 2 (`deploy`) runs on a **self-hosted** runner (an agent you own), downloads the ZIP, extracts it to `DEPLOY_DIR` (default `/opt/door`), writes the `creds.json` file if `CREDS_JSON` is provided, creates a systemd drop-in to export `DOOR_CREDS_FILE`, `DOOR_HEALTH_USERNAME`, and `DOOR_HEALTH_PASSWORD` into the service environment, then restarts `door-app.service`.
 
 Notes & recommended follow-ups:
 
@@ -310,10 +321,10 @@ Create `config.json` to override defaults:
 
 ```bash
 # Check service status
-sudo systemctl status door.service
+sudo systemctl status door-app.service
 
 # View detailed logs
-sudo journalctl -u door.service -n 50
+sudo journalctl -u door-app.service -n 50
 ```
 
 ### GPIO permissions
@@ -366,6 +377,6 @@ sudo i2cdetect -y 1
 [Your Support Information Here]
 
 ## check service
-* systemctl cat door.service
+* systemctl cat door-app.service
 * systemctl --type=service --state=running
 

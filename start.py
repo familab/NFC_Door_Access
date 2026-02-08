@@ -49,7 +49,7 @@ from lib.logging_utils import (
     log_pn532_error
 )
 from lib.door_control import DoorController, set_door_status, get_door_status
-from lib.health_server import HealthServer, update_pn532_success, update_pn532_error
+from lib.health_server import HealthServer, update_pn532_success, update_pn532_error, set_badge_refresh_callback
 from lib.watchdog import start_watchdog, stop_watchdog
 
 # GPIO Pin Definitions (from config)
@@ -67,8 +67,19 @@ CSV_FILE = config["CSV_FILE"]
 setup_logger()
 logger = get_logger()
 
+# Log which backends are active for easier debugging in dev
+try:
+    gpio_backend = getattr(GPIO, '__name__', type(GPIO).__name__)
+except Exception:
+    gpio_backend = str(GPIO)
+
+try:
+    pn532_backend = 'PN532 hardware libs' if PN532_I2C is not None else 'PN532 stub'
+except Exception:
+    pn532_backend = 'PN532 stub'
+
 logger.info("=" * 60)
-logger.info("Door Controller Starting")
+logger.info(f"Door Controller Starting (GPIO backend: {gpio_backend}; PN532: {pn532_backend})")
 logger.info("=" * 60)
 
 # Google Sheets Setup (lazy imports so start.py can run without these packages installed)
@@ -99,6 +110,42 @@ except Exception as e:
     sheet = None
     log_sheet = None
     update_last_badge_download(success=False)
+
+
+# Register badge refresh callback so it can be invoked from the health page
+from lib.health_server import set_badge_refresh_callback
+
+def _refresh_badge_list():
+    """Refresh badge list from Google Sheets and update local CSV backup.
+
+    Returns:
+        (success: bool, message: str)
+    """
+    try:
+        if not sheet:
+            logger.warning("Badge refresh requested but Google Sheets not connected")
+            return False, "No Google Sheets connection"
+
+        uids = [cell.strip() for cell in sheet.col_values(1) if cell]
+
+        # Persist to local CSV fallback
+        try:
+            with open(CSV_FILE, 'w', newline='') as f:
+                writer = csv.writer(f)
+                for u in uids:
+                    writer.writerow([u])
+        except Exception as e:
+            logger.warning(f"Failed to write local CSV fallback: {e}")
+
+        update_last_badge_download(success=True)
+        logger.info(f"Badge list refreshed: {len(uids)} entries")
+        return True, f"{len(uids)} badges"
+    except Exception as e:
+        logger.exception("Badge refresh failed")
+        update_last_badge_download(success=False)
+        return False, str(e)
+
+set_badge_refresh_callback(_refresh_badge_list)
 
 # Lock object for managing GPIO access between threads
 gpio_lock = threading.Lock()
@@ -314,7 +361,7 @@ def main():
         rfid_thread.start()
 
         logger.info("All systems operational")
-        logger.info(f"Health page available at http://<your-ip>:{config['HEALTH_SERVER_PORT']}/health")
+        logger.info(f"Health page available at http://127.0.0.1:{config['HEALTH_SERVER_PORT']}/health")
         logger.info(f"Health page credentials: {config['HEALTH_SERVER_USERNAME']} / {config['HEALTH_SERVER_PASSWORD']}")
 
         # Wait for both threads to finish (they won't in normal operation)

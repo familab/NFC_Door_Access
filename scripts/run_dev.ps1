@@ -13,7 +13,35 @@ if (Test-Path -Path .\venv\Scripts\Activate.ps1) {
 if ($Install) {
     Write-Host "Installing dependencies (Windows will install emulator where appropriate)..."
     python -m pip install --upgrade pip
-    pip install -r requirements.txt
+
+    # Use a narrower requirements file on Windows to avoid hardware packages that fail to build
+    if ($env:OS -eq 'Windows_NT' -and (Test-Path "requirements-windows.txt")) {
+        Write-Host "Detected Windows: installing Windows-friendly requirements..."
+        pip install -r requirements-windows.txt
+    }
+    else {
+        pip install -r requirements.txt
+    }
+
+    # Attempt to install one of several optional emulator packages (no-op if already present)
+    # Try a short list of common emulator package names; avoid noisy 'package not found' pip errors
+    $emulators = @('fake-rpi', 'fake_rpi')
+    $installed = $false
+    foreach ($pkg in $emulators) {
+        Write-Host "Attempting to install emulator package: $pkg"
+        & pip install --disable-pip-version-check $pkg > $null 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Installed emulator: $pkg" -ForegroundColor Green
+            $installed = $true
+            break
+        } else {
+            Write-Host "Package $pkg not available or failed to install; trying next..." -ForegroundColor Yellow
+        }
+    }
+    if (-not $installed) {
+        Write-Host "No emulator package installed. The project includes local stubs (lib/gpio_stub.py and lib/pn532_stub.py) that will be used automatically." -ForegroundColor Yellow
+        Write-Host "If you want an emulator, consider installing one of: fake-rpi, fake_rpi, or an alternative that provides the RPi.GPIO API." -ForegroundColor Yellow
+    }
 }
 
 Write-Host "Starting application (dev mode)"

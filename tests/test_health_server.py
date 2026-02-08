@@ -137,6 +137,37 @@ class TestHealthCheckHandler(unittest.TestCase):
         handler = self._create_handler(auth_header='Invalid format')
         self.assertFalse(handler.check_auth())
 
+    def test_refresh_badges_no_callback(self):
+        """Requesting badge refresh without callback should result in a 503 and mark download as failed."""
+        credentials = base64.b64encode(b'testuser:testpass').decode('ascii')
+        auth_header = f'Basic {credentials}'
+
+        handler = self._create_handler(auth_header=auth_header)
+        handler.path = '/refresh_badges'
+
+        with patch('lib.health_server.update_last_badge_download') as upd_mock:
+            # Ensure no callback is registered
+            health_server._badge_refresh_fn = None
+            handler.do_POST()
+            upd_mock.assert_called_with(success=False)
+
+    def test_refresh_badges_calls_callback_success(self):
+        """A successful badge refresh should call the registered callback and update timestamps."""
+        credentials = base64.b64encode(b'testuser:testpass').decode('ascii')
+        auth_header = f'Basic {credentials}'
+
+        handler = self._create_handler(auth_header=auth_header)
+        handler.path = '/refresh_badges'
+
+        mock_cb = Mock(return_value=(True, '5 badges'))
+        health_server.set_badge_refresh_callback(mock_cb)
+
+        with patch('lib.health_server.update_last_badge_download') as upd_mock, patch('lib.health_server.record_action') as rec_mock:
+            handler.do_POST()
+            mock_cb.assert_called_once()
+            upd_mock.assert_called_with(success=True)
+            rec_mock.assert_called()
+
 
 class TestHealthServer(unittest.TestCase):
     """Test cases for HealthServer class."""

@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional, List
 import socket
+import json
 
 from .config import config, __version__
 from .logging_utils import (
@@ -14,7 +15,9 @@ from .logging_utils import (
     get_last_google_log_success,
     get_last_badge_download,
     get_last_google_error,
-    get_log_file_size
+    get_log_file_size,
+    update_last_badge_download,
+    record_action
 )
 from .door_control import get_door_status, get_door_status_updated
 
@@ -22,6 +25,9 @@ from .door_control import get_door_status, get_door_status_updated
 _app_start_time = datetime.now()
 _last_pn532_success = None
 _last_pn532_error = None
+
+# Badge refresh callback (set by start.py)
+_badge_refresh_fn = None
 
 # Thread-safe lock for PN532 state
 _pn532_lock = threading.Lock()
@@ -53,6 +59,15 @@ def get_pn532_status():
             'last_success': _last_pn532_success,
             'last_error': _last_pn532_error
         }
+
+
+def set_badge_refresh_callback(fn):
+    """Register a callback for manual badge refresh.
+
+    The callback should return either a boolean (success) or a tuple (success, info).
+    """
+    global _badge_refresh_fn
+    _badge_refresh_fn = fn
 
 
 def format_timestamp(dt: Optional[datetime]) -> str:
@@ -195,6 +210,89 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b'<html><body><h1>401 Unauthorized</h1></body></html>')
 
+    def do_POST(self):
+        """Handle POST requests (used for badge refresh)."""
+        # Check Basic Auth
+        if not self.check_auth():
+            self.send_auth_required()
+            return
+
+        if self.path == '/api/refresh_badges':
+            # Trigger badge refresh callback if available
+            is_ajax = self.headers.get('X-Requested-With') == 'XMLHttpRequest'
+
+            if _badge_refresh_fn is None:
+                get_logger().warning("Badge refresh requested but no callback is registered")
+                try:
+                    update_last_badge_download(success=False)
+                except Exception:
+                    pass
+
+                if is_ajax:
+                    self.send_response(503)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    payload = json.dumps({'success': False, 'message': 'Badge refresh not available'})
+                    self.wfile.write(payload.encode('utf-8'))
+                    return
+
+                self.send_response(503)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                self.wfile.write(b'<html><body><h1>503 Service Unavailable</h1><p>Badge refresh not available.</p></body></html>')
+                return
+
+            try:
+                result = _badge_refresh_fn()
+                # Allow callbacks that return (bool, info) or just bool
+                if isinstance(result, tuple):
+                    success = bool(result[0])
+                    info = str(result[1]) if len(result) > 1 else ''
+                else:
+                    success = bool(result)
+                    info = ''
+
+                update_last_badge_download(success=success)
+                record_action('Manual Badge Refresh', status='Success' if success else 'Failure')
+
+                if is_ajax:
+                    status_code = 200 if success else 500
+                    self.send_response(status_code)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    payload = json.dumps({'success': success, 'message': info})
+                    self.wfile.write(payload.encode('utf-8'))
+                    return
+
+                # Redirect back to health page for non-AJAX clients
+                self.send_response(303)
+                self.send_header('Location', '/health')
+                self.end_headers()
+                return
+
+            except Exception as e:
+                get_logger().error(f"Badge refresh failed: {e}")
+                try:
+                    update_last_badge_download(success=False)
+                except Exception:
+                    pass
+
+                if is_ajax:
+                    self.send_response(500)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    payload = json.dumps({'success': False, 'message': str(e)})
+                    self.wfile.write(payload.encode('utf-8'))
+                    return
+
+                self.send_response(500)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                self.wfile.write(b'<html><body><h1>500 Internal Server Error</h1><p>Badge refresh failed.</p></body></html>')
+                return
+
+        self.send_error(404, "Not Found")
+
     def send_health_page(self):
         """Generate and send health check page."""
         # Gather health data
@@ -251,13 +349,17 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         .status-warning {{ color: #dcdcaa; font-weight: bold; }}
         .status-error {{ color: #f48771; font-weight: bold; }}
         .timestamp {{ color: #9cdcfe; }}
+        .toast {{ position: fixed; right: 20px; bottom: 20px; background: #333; color: #fff; padding: 10px 14px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.5); display: none; z-index: 9999; }}
+        .toast.success {{ background: #4ec9b0; color: #1e1e1e; }}
+        .toast.error {{ background: #f48771; }}
     </style>
 </head>
 <body>
     <h1>Door Controller Health Status</h1>
     <p class="timestamp">Version: {__version__}</p>
     <p class="timestamp">Generated: {format_timestamp(datetime.now())}</p>
-    <p class="timestamp">{refresh_html}</p>
+    <p class="timestamp">{refresh_html} &nbsp; <button id="refreshBtn" style="background:#4ec9b0;color:#1e1e1e;padding:6px;border:none;border-radius:4px;cursor:pointer;">Refresh Badge List</button></p>
+    <div id="toast" class="toast"></div>
     <p class="timestamp">Machine: {socket.gethostname()}</p>
     <p class="timestamp">Local IPs: {', '.join(get_local_ips()) or 'None'}</p>
     <table>
@@ -324,6 +426,56 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
                     location.reload();
                 }}
             }}, 1000);
+        }}
+
+        // Badge refresh button - uses AJAX and shows toast notifications
+        const refreshBtn = document.getElementById('refreshBtn');
+        const toastEl = document.getElementById('toast');
+
+        function showToast(message, kind='success', timeout=4000) {{
+            if (!toastEl) return;
+            toastEl.textContent = message;
+            toastEl.className = 'toast ' + (kind === 'success' ? 'success' : 'error');
+            toastEl.style.display = 'block';
+            setTimeout(function() {{ toastEl.style.display = 'none'; }}, timeout);
+        }}
+
+        async function doRefresh() {{
+            if (!refreshBtn) return;
+            const original = refreshBtn.textContent;
+            refreshBtn.disabled = true;
+            refreshBtn.textContent = 'Refreshing...';
+
+            try {{
+                const resp = await fetch('/api/refresh_badges', {{ method: 'POST', headers: {{ 'X-Requested-With': 'XMLHttpRequest' }}, redirect: 'manual' }});
+
+                // Prefer JSON response
+                const ct = resp.headers.get('Content-Type') || '';
+                if (ct.includes('application/json')) {{
+                    const j = await resp.json();
+                    if (resp.ok) {{
+                        showToast(j.message || 'Badge list refreshed', 'success');
+                    }} else {{
+                        showToast(j.message || 'Badge refresh failed', 'error');
+                    }}
+                }} else if (resp.status >= 200 && resp.status < 400) {{
+                    showToast('Badge list refreshed', 'success');
+                }} else {{
+                    const txt = await resp.text();
+                    showToast(txt || ('Error: ' + resp.status), 'error');
+                }}
+            }} catch (e) {{
+                showToast('Network error: ' + e.message, 'error');
+            }} finally {{
+                if (refreshBtn) {{ refreshBtn.disabled = false; refreshBtn.textContent = original; }}
+            }}
+        }}
+
+        if (refreshBtn) {{
+            refreshBtn.addEventListener('click', function (e) {{
+                e.preventDefault();
+                doRefresh();
+            }});
         }}
     }})();
     </script>
