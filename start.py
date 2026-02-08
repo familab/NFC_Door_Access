@@ -41,15 +41,14 @@ except Exception:
 # Import new modules
 from lib.config import config
 from lib.logging_utils import (
-    setup_logger,
-    get_logger,
+    logger,
     record_action,
     log_to_google_sheets,
     update_last_badge_download,
     log_pn532_error
 )
 from lib.door_control import DoorController, set_door_status, get_door_status
-from lib.health_server import HealthServer, update_pn532_success, update_pn532_error, set_badge_refresh_callback
+from lib.health_server import start_health_server, stop_health_server, update_pn532_success, update_pn532_error, set_badge_refresh_callback
 from lib.watchdog import start_watchdog, stop_watchdog
 
 # GPIO Pin Definitions (from config)
@@ -63,9 +62,8 @@ UNLOCK_DURATION = config["UNLOCK_DURATION"]
 # Local CSV backup file
 CSV_FILE = config["CSV_FILE"]
 
-# Initialize logging first
-setup_logger()
-logger = get_logger()
+# Global `logger` is initialized in lib.logging_utils at import time
+# Use the module-level `logger` imported above
 
 # Log which backends are active for easier debugging in dev
 try:
@@ -345,8 +343,8 @@ def main():
     """Main application entry point."""
     try:
         logger.info("Starting health server...")
-        health_server = HealthServer()
-        health_server.start()
+        # Use global start/stop helpers for the health server
+        start_health_server()
 
         logger.info("Starting watchdog...")
         start_watchdog()
@@ -387,8 +385,8 @@ def main():
         stop_event.set()
         logger.info("Stopping health server and watchdog...")
         try:
-            if 'health_server' in locals() and health_server:
-                health_server.stop()
+            # Stop global health server helper
+            stop_health_server()
         except Exception:
             pass
 

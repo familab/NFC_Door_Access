@@ -1,5 +1,13 @@
 # Optimizations
 
+## Table of Contents
+- [Disable Wi‑Fi Power Saving on Raspberry Pi Zero W](#disable-wi‑fi-power-saving-on-raspberry-pi-zero-w)
+  - [Check current power‑saving status](#check-current-power‑saving-status)
+  - [Disable power saving immediately (temporary)](#disable-power-saving-immediately-temporary)
+  - [Disable power saving permanently (NetworkManager systems)](#disable-power-saving-permanently-networkmanager-systems)
+  - [Disable power saving permanently (classic Raspberry Pi OS)](#disable-power-saving-permanently-classic-raspberry-pi-os)
+  - [Confirm after reboot](#confirm-after-reboot)
+
 ## Disable Wi‑Fi Power Saving on Raspberry Pi Zero W
 
 ### Check current power‑saving status

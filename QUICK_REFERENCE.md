@@ -1,5 +1,21 @@
 # Door Controller - Quick Reference Guide
 
+## Table of Contents
+- [Quick Start](#quick-start)
+  - [Initial Setup](#1-initial-setup)
+  - [Configure Credentials](#2-configure-credentials)
+  - [Run Application](#3-run-application)
+- [Common Commands](#common-commands)
+  - [Service Management](#service-management)
+  - [Testing](#testing)
+  - [Logs](#logs)
+- [Health Monitoring](#health-monitoring)
+- [Configuration](#configuration)
+- [Troubleshooting](#troubleshooting)
+- [File Structure](#file-structure)
+- [Security Checklist](#security-checklist)
+- [Maintenance Tasks](#maintenance-tasks)
+
 ## Quick Start
 
 ### 1. Initial Setup
@@ -93,6 +109,11 @@ Default credentials: `admin` / `changeme` (CHANGE THESE!)
 - PN532 status
 - Google Sheets errors
 - Disk space
+
+### Useful Links
+- [Optimizations](optimizations.md)
+- [Data Schema](data-schema.md)
+- [README](README.md)
 
 ## Configuration
 

@@ -42,6 +42,25 @@ if ($Install) {
         Write-Host "No emulator package installed. The project includes local stubs (lib/gpio_stub.py and lib/pn532_stub.py) that will be used automatically." -ForegroundColor Yellow
         Write-Host "If you want an emulator, consider installing one of: fake-rpi, fake_rpi, or an alternative that provides the RPi.GPIO API." -ForegroundColor Yellow
     }
+
+    # Ensure debugpy is installed in the venv so VS Code debugging works
+    try {
+        $venvPy = Join-Path $PWD 'venv\Scripts\python.exe'
+        if (Test-Path $venvPy) {
+            Write-Host "Checking for debugpy in venv..."
+            & $venvPy -m pip show debugpy > $null 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "Installing debugpy into the venv..."
+                & $venvPy -m pip install debugpy
+            } else {
+                Write-Host "debugpy already present in venv."
+            }
+        } else {
+            Write-Host "No venv python found; skipping debugpy install." -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "Failed to ensure debugpy: $_" -ForegroundColor Yellow
+    }
 }
 
 Write-Host "Starting application (dev mode)"

@@ -4,7 +4,9 @@ from logging.handlers import TimedRotatingFileHandler
 import time
 import threading
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, date, timedelta
+import os
+import re
 
 from .config import config
 
@@ -40,20 +42,33 @@ def setup_logger(log_file: Optional[str] = None) -> logging.Logger:
         if logger is not None:  # Double-check after acquiring lock
             return logger
 
+        log_file_param = log_file
         log_file = log_file or config["LOG_FILE"]
+
+        # Ensure log directory exists
+        log_dir = os.path.dirname(log_file)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
 
         # Create logger
         logger = logging.getLogger("door_controller")
-        logger.setLevel(logging.INFO)
+
+        # Default level is INFO from config
+        level_name = str(config.get("LOG_LEVEL", "INFO")).upper()
+        level = getattr(logging, level_name, logging.INFO)
+        logger.setLevel(level)
 
         # Create rotating file handler (rotates daily, keeps 7 days)
-        handler = TimedRotatingFileHandler(
-            log_file,
-            when='midnight',
-            interval=1,
-            backupCount=config["LOG_RETENTION_DAYS"],
-            encoding='utf-8'
-        )
+        if log_file_param is None:
+            handler = DailyNamedFileHandler(log_file, config["LOG_RETENTION_DAYS"])
+        else:
+            handler = TimedRotatingFileHandler(
+                log_file,
+                when='midnight',
+                interval=1,
+                backupCount=config["LOG_RETENTION_DAYS"],
+                encoding='utf-8'
+            )
 
         # Create formatter
         formatter = logging.Formatter(
@@ -164,6 +179,12 @@ def update_last_badge_download(success: bool = True):
     else:
         get_logger().warning("Badge list download failed")
 
+    # As part of daily badge list download, clean old logs
+    try:
+        cleanup_old_logs()
+    except Exception:
+        pass
+
 
 def get_last_google_log_success() -> Optional[datetime]:
     """Get the timestamp of the last successful Google Sheets log."""
@@ -206,8 +227,118 @@ def get_log_file_size() -> int:
         File size in bytes, or 0 if file doesn't exist
     """
     import os
-    log_file = config["LOG_FILE"]
+    log_file = get_current_log_file_path()
     try:
         return os.path.getsize(log_file)
     except FileNotFoundError:
         return 0
+
+
+def _parse_log_base(log_file: str):
+    log_dir = os.path.dirname(log_file) or "."
+    base = os.path.basename(log_file)
+    base_name, ext = os.path.splitext(base)
+    ext = ext or ".txt"
+    return log_dir, base_name, ext
+
+
+def _get_dated_log_path(log_file: str, for_date: date) -> str:
+    log_dir, base_name, ext = _parse_log_base(log_file)
+    return os.path.join(log_dir, f"{base_name}-{for_date:%Y-%m-%d}{ext}")
+
+
+def get_current_log_file_path() -> str:
+    log_file = config["LOG_FILE"]
+    if os.path.exists(log_file):
+        return log_file
+
+    dated_path = _get_dated_log_path(log_file, date.today())
+    if os.path.exists(dated_path):
+        return dated_path
+
+    return log_file
+
+
+def cleanup_old_logs(retention_days: Optional[int] = None):
+    retention_days = retention_days or config["LOG_RETENTION_DAYS"]
+    log_file = config["LOG_FILE"]
+    log_dir, base_name, ext = _parse_log_base(log_file)
+
+    if not os.path.exists(log_dir):
+        return
+
+    pattern = re.compile(rf"^{re.escape(base_name)}-(\d{{4}}-\d{{2}}-\d{{2}}){re.escape(ext)}$")
+    cutoff = date.today() - timedelta(days=retention_days)
+
+    for name in os.listdir(log_dir):
+        match = pattern.match(name)
+        if not match:
+            continue
+        try:
+            file_date = datetime.strptime(match.group(1), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if file_date < cutoff:
+            try:
+                os.remove(os.path.join(log_dir, name))
+            except Exception:
+                pass
+
+
+class DailyNamedFileHandler(logging.Handler):
+    """Log handler that writes to a dated log file and rolls over daily."""
+
+    def __init__(self, base_log_file: str, retention_days: int):
+        super().__init__()
+        self.base_log_file = base_log_file
+        self.retention_days = retention_days
+        self._current_date = None
+        self._stream = None
+        self._open_for_date(date.today())
+
+    def _open_for_date(self, target_date: date):
+        if self._stream:
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+
+        log_dir, _, _ = _parse_log_base(self.base_log_file)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+
+        self._current_date = target_date
+        self.baseFilename = _get_dated_log_path(self.base_log_file, target_date)
+        self._stream = open(self.baseFilename, "a", encoding="utf-8")
+
+    def emit(self, record):
+        try:
+            today = date.today()
+            if self._current_date != today:
+                self._open_for_date(today)
+                cleanup_old_logs(self.retention_days)
+
+            msg = self.format(record)
+            self._stream.write(msg + "\n")
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
+    def flush(self):
+        if self._stream:
+            try:
+                self._stream.flush()
+            except Exception:
+                pass
+
+    def close(self):
+        try:
+            if self._stream:
+                self._stream.close()
+        finally:
+            self._stream = None
+            super().close()
+
+
+# Initialize logger at import time so other modules can use `logger` directly
+logger = setup_logger()

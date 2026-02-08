@@ -2,6 +2,34 @@
 
 Python 3 Raspberry Pi Zero RFID door access control system with cloud-based badge management, health monitoring, and robust logging.
 
+## Table of Contents
+- [Features](#features)
+- [Hardware Requirements](#hardware-requirements)
+- [GPIO Pin Configuration](#gpio-pin-configuration)
+- [Installation](#installation)
+  - [Clone the Repository](#1-clone-the-repository)
+  - [Set Up Python Virtual Environment](#2-set-up-python-virtual-environment)
+  - [Install Dependencies](#3-install-dependencies)
+  - [Configure Google Sheets API](#4-configure-google-sheets-api)
+  - [Create Google Sheets](#5-create-google-sheets)
+  - [Configure Application](#6-configure-application)
+- [Running the Application](#running-the-application)
+  - [Manual Execution](#manual-execution)
+  - [Systemd Service (Production)](#systemd-service-production)
+- [Health Monitoring](#health-monitoring)
+- [Logging System](#logging-system)
+- [Systemd Watchdog](#systemd-watchdog)
+- [Testing](#testing)
+- [Continuous Integration](#continuous-integration)
+- [Deployment (production)](#deployment-production)
+- [Additional Documentation](#additional-documentation)
+- [Configuration Options](#configuration-options)
+- [Architecture](#architecture)
+- [Troubleshooting](#troubleshooting)
+- [Security Considerations](#security-considerations)
+- [License](#license)
+- [Support](#support)
+
 ## Features
 
 - **NFC/RFID Badge Authentication**: PN532-based badge reader with Google Sheets integration
@@ -164,6 +192,14 @@ http://<raspberry-pi-ip>:8080/health
 
 **Default credentials**: `admin` / `changeme` (change in config!)
 
+**API Documentation (Swagger UI)**: An interactive API documentation (Swagger UI) is served at:
+
+```
+http://<raspberry-pi-ip>:8080/docs
+```
+
+The raw OpenAPI JSON spec is available at `/openapi.json` (e.g., `http://<raspberry-pi-ip>:8080/openapi.json`). Access to the API docs is protected by the same Basic Auth credentials as the health page.
+
 ### Health Page Information
 
 - Door status (OPEN/CLOSED)
@@ -246,6 +282,15 @@ Tests run on Python 3.9, 3.10, and 3.11.
 ## Deployment (production)
 
 This repository includes a deployment workflow that builds a ZIP artifact and deploys it to a self-hosted production agent.
+
+## Additional Documentation
+
+- [Optimizations](optimizations.md) — Performance and power optimizations for devices (Wi‑Fi power saving, etc.)
+- [Quick Reference](QUICK_REFERENCE.md) — Short commands and common operations
+- [Data Schema](data-schema.md) — Google Sheets structure and expected formats (badge list and access log)
+- **API Docs** (`/docs`) — Interactive Swagger UI for exploring the HTTP API (OpenAPI JSON at `/openapi.json`)
+
+
 
 Required repository secrets (set under Settings → Secrets):
 
