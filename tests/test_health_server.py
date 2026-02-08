@@ -192,6 +192,8 @@ class TestHealthCheckHandler(unittest.TestCase):
         handler2.do_GET()
         body2 = handler2.wfile.getvalue()
         self.assertIn(b'SwaggerUIBundle', body2)
+        # FavIcon should be present like health page
+        self.assertIn(b'favicon.ico', body2)
 
     def test_health_page_shows_current_log_file(self):
         """Health page should show the current log file path."""

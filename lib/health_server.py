@@ -233,6 +233,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
   <head>
     <meta charset="utf-8" />
     <title>Door Controller API Docs</title>
+    <link rel="icon" href="https://images.squarespace-cdn.com/content/v1/65fbda49f5eb7e7df1ae5f87/1711004274233-C9RL74H38DXHYWBDMLSS/favicon.ico?format=100w">
     <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@4/swagger-ui.css" />
   </head>
   <body>
