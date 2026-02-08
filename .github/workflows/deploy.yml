@@ -1,0 +1,94 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build_package:
+    name: Build ZIP artifact
+    runs-on: ubuntu-latest
+    outputs:
+      artifact-name: deploy-artifact
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create deploy zip
+        run: |
+          mkdir -p build
+          # Include README, markdown files, service files, version txt, main.py, lib, requirements.txt
+          zip -r build/deploy.zip README.md *.md *.service version*.txt main.py lib requirements.txt || true
+          ls -l build
+
+      - name: Upload deploy artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-artifact
+          path: build/deploy.zip
+
+  deploy:
+    name: Deploy to production
+    needs: build_package
+    runs-on: [self-hosted]
+    environment: production
+    steps:
+      - name: Download deploy artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-artifact
+          path: .
+
+      - name: Prepare deployment directory
+        run: |
+          DEPLOY_DIR=${{ env.DEPLOY_DIR:-/opt/door }}
+          sudo mkdir -p "$DEPLOY_DIR"
+          sudo chown $(whoami) "$DEPLOY_DIR"
+        env:
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
+
+      - name: Unpack artifact to deploy dir
+        run: |
+          DEPLOY_DIR=${{ env.DEPLOY_DIR:-/opt/door }}
+          unzip -o build/deploy.zip -d "$DEPLOY_DIR"
+          ls -l "$DEPLOY_DIR"
+        env:
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
+
+      - name: Write Google service account credentials (if provided)
+        if: ${{ secrets.CREDS_JSON != '' }}
+        run: |
+          DEPLOY_DIR=${{ env.DEPLOY_DIR:-/opt/door }}
+          echo "Writing creds to $DEPLOY_DIR/creds.json"
+          echo "${{ secrets.CREDS_JSON }}" | sudo tee "$DEPLOY_DIR/creds.json" > /dev/null
+          sudo chmod 600 "$DEPLOY_DIR/creds.json"
+        env:
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
+
+      - name: Create systemd drop-in with environment (DOOR_CREDS_FILE and health credentials)
+        run: |
+          DEPLOY_DIR=${{ env.DEPLOY_DIR:-/opt/door }}
+          sudo mkdir -p /etc/systemd/system/door.service.d
+          sudo bash -c 'cat > /etc/systemd/system/door.service.d/override.conf <<EOF
+          [Service]
+          Environment="DOOR_CREDS_FILE=${DEPLOY_DIR}/creds.json"
+          Environment="DOOR_HEALTH_USERNAME=${{ secrets.DOOR_HEALTH_USERNAME }}"
+          Environment="DOOR_HEALTH_PASSWORD=${{ secrets.DOOR_HEALTH_PASSWORD }}"
+          Environment="DOOR_HEALTH_PORT=${{ secrets.DOOR_HEALTH_PORT }}"
+          EOF'
+          sudo systemctl daemon-reload
+        env:
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
+
+      - name: Restart door service
+        run: |
+          sudo systemctl restart door.service
+          sudo systemctl status door.service --no-pager --lines=50
+
+      - name: Finish
+        run: echo "Deployment complete"
+
+# Notes:
+# - The deploy job runs on self-hosted runner(s). Protect the `production` environment with required reviewers
+#   in repository settings to enforce approvals before deployment.
+# - Ensure repository secrets are configured: CREDS_JSON (service account JSON content), DOOR_HEALTH_USERNAME,
+#   DOOR_HEALTH_PASSWORD, and optionally DEPLOY_DIR and DOOR_HEALTH_PORT.

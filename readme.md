@@ -232,6 +232,33 @@ See `.github/workflows/tests.yml` for CI configuration.
 
 Tests run on Python 3.9, 3.10, and 3.11.
 
+## Deployment (production)
+
+This repository includes a deployment workflow that builds a ZIP artifact and deploys it to a self-hosted production agent.
+
+Required repository secrets (set under Settings → Secrets):
+
+- `CREDS_JSON` — (optional) the full Google Service Account JSON content (will be written to `creds.json` on the target host)
+- `DOOR_HEALTH_USERNAME` — username for the health page (recommended to change from `admin`)
+- `DOOR_HEALTH_PASSWORD` — password for the health page (set a strong value)
+- `DOOR_HEALTH_PORT` — (optional) port for the health server (default 8080)
+- `DEPLOY_DIR` — (optional) directory on the target host to deploy files (default: `/opt/door`)
+
+Protection and approvals:
+
+- The `deploy` job targets the `production` environment. Configure environment protection rules in GitHub to require approvals or checks before the workflow can proceed.
+
+Behavior of the deployment workflow:
+
+- Job 1 (`build_package`) creates a ZIP containing `README.md`, all `*.md` files, `*.service` files, `version*.txt`, `main.py`, the `lib/` package, and `requirements.txt`.
+- Job 2 (`deploy`) runs on a **self-hosted** runner (an agent you own), downloads the ZIP, extracts it to `DEPLOY_DIR` (default `/opt/door`), writes the `creds.json` file if `CREDS_JSON` is provided, creates a systemd drop-in to export `DOOR_CREDS_FILE`, `DOOR_HEALTH_USERNAME`, and `DOOR_HEALTH_PASSWORD` into the service environment, then restarts `door.service`.
+
+Notes & recommended follow-ups:
+
+- Secrets are never committed to the repository; they are provided to the workflow via GitHub Secrets.
+- The deployment writes the service account JSON to `creds.json` and sets `DOOR_CREDS_FILE` to point there. The service will read the config at startup.
+- You may prefer to manage secrets via a secret management system or encrypted files on the target host.
+
 ## Configuration Options
 
 ### Environment Variables
