@@ -118,7 +118,7 @@ jobs:
     - name: Run unit tests and generate JUnit XML
       run: |
         mkdir -p test-results
-        python -m xmlrunner discover -s tests -p "test_*.py" -o test-results
+        python -c "import sys, unittest, xmlrunner; suite=unittest.defaultTestLoader.discover('tests', pattern='test_*.py'); result=xmlrunner.XMLTestRunner(output='test-results').run(suite); sys.exit(not result.wasSuccessful())"
 
     - name: Publish unit test results
       if: always()
