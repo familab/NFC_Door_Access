@@ -1,0 +1,52 @@
+workflow: TrunkBased/preview1
+
+mode: ContinuousDelivery
+assembly-versioning-scheme: MajorMinorPatch
+assembly-file-versioning-scheme: MajorMinorPatch
+semantic-version-format: Strict
+commit-message-incrementing: Enabled
+
+branches:
+  main:
+    regex: ^main$
+    increment: Patch
+    is-main-branch: true
+    is-release-branch: true
+    prevent-increment:
+      of-merged-branch: true
+    track-merge-target: true
+    track-merge-message: true
+
+  dev:
+    regex: ^dev$
+    increment: None
+    mode: ContinuousDelivery
+    label: alpha
+    prevent-increment:
+      of-merged-branch: true
+    track-merge-message: true
+    source-branches:
+      - main
+
+  # builds directly off feature/<name> branches
+  feature:
+    regex: ^features?[/-](?<BranchName>.+)
+    increment: None
+    label: "beta{BranchName}"
+    track-merge-message: true
+    source-branches:
+      - main
+      - dev
+
+  pull-request:
+    regex: ^(pull|pull-requests|pr)[/-](?<Number>\d+)
+    increment: None
+    mode: ContinuousDelivery
+    label: zeta{Number}
+    prevent-increment:
+      of-merged-branch: true
+    track-merge-message: true
+    source-branches:
+      - main
+      - dev
+      - feature
