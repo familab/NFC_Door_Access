@@ -2,7 +2,7 @@
 Description=Door Controller - RFID Access Control System
 After=network-online.target
 Wants=network-online.target
-Documentation=https://github.com/yourorg/badge_scanner
+Documentation=https://github.com/lastlink/familab_badge_scanner
 
 [Service]
 Type=simple
