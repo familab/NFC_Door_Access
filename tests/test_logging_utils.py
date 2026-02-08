@@ -4,7 +4,7 @@ import tempfile
 import os
 import logging
 from datetime import datetime
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 import lib.logging_utils as logging_utils
 
 
@@ -73,36 +73,11 @@ class TestLoggingUtils(unittest.TestCase):
             # Defer removal until handlers are closed in tearDown
             self._temp_files.append(log_file)
 
-    def test_log_to_google_sheets_success(self):
-        """Test successful Google Sheets logging."""
-        mock_sheet = Mock()
-
-        result = logging_utils.log_to_google_sheets(mock_sheet, "ABC123", "Granted")
-
-        self.assertTrue(result)
-        mock_sheet.append_row.assert_called_once()
-
-        # Check timestamp was updated
-        last_success = logging_utils.get_last_google_log_success()
-        self.assertIsNotNone(last_success)
-        self.assertIsInstance(last_success, datetime)
-
-    def test_log_to_google_sheets_failure(self):
-        """Test Google Sheets logging failure handling."""
-        mock_sheet = Mock()
-        mock_sheet.append_row.side_effect = Exception("Connection error")
-
-        # Initialize logger first
-        logging_utils.setup_logger()
-
-        result = logging_utils.log_to_google_sheets(mock_sheet, "ABC123", "Granted")
-
-        self.assertFalse(result)
-
-        # Check error was recorded
+    def test_update_last_google_error(self):
+        """Test updating last Google Sheets error message."""
+        logging_utils.update_last_google_error("Connection error")
         last_error = logging_utils.get_last_google_error()
-        self.assertIsNotNone(last_error)
-        self.assertIn("Connection error", last_error)
+        self.assertEqual(last_error, "Connection error")
 
     def test_update_timestamps(self):
         """Test timestamp update functions."""

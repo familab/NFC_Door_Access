@@ -25,7 +25,7 @@ DEFAULT_CONFIG = {
     "CSV_FILE": "google_sheet_data.csv",
     "CREDS_FILE": "creds.json",
     "LOG_FILE": "logs/door_controller.txt",
-    "WATCHDOG_FILE": "/tmp/door_controller_watchdog.txt",
+    "WATCHDOG_FILE": "logs/door_controller_watchdog.txt",
 
     # Google Sheets
     "BADGE_SHEET_NAME": "Badge List - Access Control",

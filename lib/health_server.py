@@ -17,6 +17,7 @@ from .logging_utils import (
     get_last_badge_download,
     get_last_google_error,
     get_log_file_size,
+    get_current_log_file_path,
     update_last_badge_download,
     record_action
 )
@@ -383,13 +384,21 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
 
         disk = get_disk_space()
 
-        # Last log entry (read last line from log file)
+        # Current log file path (dated file name)
+        try:
+            current_log_file = get_current_log_file_path()
+        except Exception:
+            current_log_file = config.get("LOG_FILE", "")
+
+        # Last log entry: read up to the last 50 lines from the current log file
         last_log_entry = "N/A"
         try:
-            with open(config["LOG_FILE"], 'r') as f:
+            with open(current_log_file, 'r') as f:
                 lines = f.readlines()
                 if lines:
-                    last_log_entry = lines[-1].strip()
+                    tail_lines = lines[-50:]
+                    # Strip trailing newlines and join with newlines preserved for display
+                    last_log_entry = "\n".join(l.rstrip('\n') for l in tail_lines)
         except Exception:
             pass
 
@@ -474,12 +483,18 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             <td>{log_size_mb:.2f} MB</td>
         </tr>
         <tr>
+            <td>Current Log File</td>
+            <td style="font-size:0.9em; word-break:break-all;">{current_log_file}</td>
+        </tr>
+        <tr>
             <td>Disk Free Space</td>
             <td>{disk['free_mb']:.2f} MB / {disk['total_mb']:.2f} MB ({disk['percent_used']:.1f}% used)</td>
         </tr>
         <tr>
-            <td>Last Log Entry</td>
-            <td style="font-size: 0.9em; word-break: break-all;">{last_log_entry}</td>
+            <td>Last 50 Log Entries</td>
+            <td style="font-size: 0.9em; word-break: break-all;">
+                <pre style="white-space: pre-wrap; max-height: 240px; overflow: auto; margin:0;">{last_log_entry}</pre>
+            </td>
         </tr>
     </table>
     <script>

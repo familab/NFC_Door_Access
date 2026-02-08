@@ -43,10 +43,9 @@ from lib.config import config
 from lib.logging_utils import (
     logger,
     record_action,
-    log_to_google_sheets,
-    update_last_badge_download,
     log_pn532_error
 )
+from lib.data import GoogleSheetsData
 from lib.door_control import DoorController, set_door_status, get_door_status
 from lib.health_server import start_health_server, stop_health_server, update_pn532_success, update_pn532_error, set_badge_refresh_callback
 from lib.watchdog import start_watchdog, stop_watchdog
@@ -80,34 +79,9 @@ logger.info("=" * 60)
 logger.info(f"Door Controller Starting (GPIO backend: {gpio_backend}; PN532: {pn532_backend})")
 logger.info("=" * 60)
 
-# Google Sheets Setup (lazy imports so start.py can run without these packages installed)
-sheet = None
-log_sheet = None
-try:
-    import gspread
-    from oauth2client.service_account import ServiceAccountCredentials
-
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(config["CREDS_FILE"], scope)
-    client = gspread.authorize(creds)
-
-    # RFID Sheets
-    sheet = client.open(config["BADGE_SHEET_NAME"]).sheet1
-    log_sheet = client.open(config["LOG_SHEET_NAME"]).sheet1
-
-    logger.info("Google Sheets connection established")
-    update_last_badge_download(success=True)
-except ModuleNotFoundError as e:
-    logger.warning(f"Google Sheets libraries not available: {e}. Continuing without Google Sheets.")
-    sheet = None
-    log_sheet = None
-    update_last_badge_download(success=False)
-except Exception as e:
-    logger.warning(f"Failed to connect to Google Sheets: {e}")
-    logger.warning("Will attempt to use local CSV fallback")
-    sheet = None
-    log_sheet = None
-    update_last_badge_download(success=False)
+# Google Sheets Setup (lazy imports handled inside data wrapper)
+data_client = GoogleSheetsData()
+data_client.connect()
 
 
 # Register badge refresh callback so it can be invoked from the health page
@@ -119,29 +93,7 @@ def _refresh_badge_list():
     Returns:
         (success: bool, message: str)
     """
-    try:
-        if not sheet:
-            logger.warning("Badge refresh requested but Google Sheets not connected")
-            return False, "No Google Sheets connection"
-
-        uids = [cell.strip() for cell in sheet.col_values(1) if cell]
-
-        # Persist to local CSV fallback
-        try:
-            with open(CSV_FILE, 'w', newline='') as f:
-                writer = csv.writer(f)
-                for u in uids:
-                    writer.writerow([u])
-        except Exception as e:
-            logger.warning(f"Failed to write local CSV fallback: {e}")
-
-        update_last_badge_download(success=True)
-        logger.info(f"Badge list refreshed: {len(uids)} entries")
-        return True, f"{len(uids)} badges"
-    except Exception as e:
-        logger.exception("Badge refresh failed")
-        update_last_badge_download(success=False)
-        return False, str(e)
+    return data_client.refresh_badge_list_to_csv(CSV_FILE)
 
 set_badge_refresh_callback(_refresh_badge_list)
 
@@ -191,16 +143,14 @@ def unlock_door():
     """Unlock door for 1 hour using door controller."""
     door_controller.unlock_door(UNLOCK_DURATION)
     record_action("Manual Unlock (1 hour)")
-    if log_sheet:
-        log_to_google_sheets(log_sheet, "Manual Unlock (1 hour)", "Success")
+    data_client.log_access("Manual Unlock (1 hour)", "Success")
 
 
 def lock_door():
     """Lock door using door controller."""
     door_controller.lock_door()
     record_action("Manual Lock")
-    if log_sheet:
-        log_to_google_sheets(log_sheet, "Manual Lock", "Success")
+    data_client.log_access("Manual Lock", "Success")
 
 
 # Fallback to CSV if Google Sheets is unavailable
@@ -272,12 +222,12 @@ def _check_uid_from_sources(uid_hex: str) -> Tuple[bool, str]:
     source = "unknown"
 
     try:
-        if sheet:
-            uids = [cell.lower() for cell in sheet.col_values(1)]
-            if uid_hex in uids:
+        if data_client.is_connected():
+            if data_client.check_uid_in_sheet(uid_hex):
                 access_granted = True
                 source = "Google Sheets"
-            update_last_badge_download(success=True)
+        else:
+            raise RuntimeError("Google Sheets not connected")
     except Exception as e:
         # Any problem with Google Sheets falls back to CSV
         logger.warning(f"Google Sheets lookup failed: {e}")
@@ -316,15 +266,13 @@ def check_rfid(stop_event: threading.Event):
                         door_controller.unlock_temporarily(config["DOOR_UNLOCK_BADGE_DURATION"])
 
                     # Log to Google Sheets (best effort)
-                    if log_sheet:
-                        log_to_google_sheets(log_sheet, uid_hex, "Granted")
+                    data_client.log_access(uid_hex, "Granted")
                 else:
                     logger.warning(f"Access DENIED for {uid_hex}")
                     record_action("Badge Scan", uid_hex, "Denied")
 
                     # Log to Google Sheets (best effort)
-                    if log_sheet:
-                        log_to_google_sheets(log_sheet, uid_hex, "Denied")
+                    data_client.log_access(uid_hex, "Denied")
 
                 # Prevent multiple immediate reads but allow early exit on stop
                 stop_event.wait(1)

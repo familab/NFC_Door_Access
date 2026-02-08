@@ -193,6 +193,48 @@ class TestHealthCheckHandler(unittest.TestCase):
         body2 = handler2.wfile.getvalue()
         self.assertIn(b'SwaggerUIBundle', body2)
 
+    def test_health_page_shows_current_log_file(self):
+        """Health page should show the current log file path."""
+        credentials = base64.b64encode(b'testuser:testpass').decode('ascii')
+        auth_header = f'Basic {credentials}'
+
+        handler = self._create_handler(auth_header=auth_header, path='/health')
+        # Patch the log file path function
+        with patch('lib.health_server.get_current_log_file_path', return_value='/tmp/test-2026-02-08.txt'):
+            handler.do_GET()
+            body = handler.wfile.getvalue()
+            self.assertIn(b'/tmp/test-2026-02-08.txt', body)
+
+    def test_health_page_shows_last_50_lines(self):
+        """Health page should display the most recent 50 log lines."""
+        credentials = base64.b64encode(b'testuser:testpass').decode('ascii')
+        auth_header = f'Basic {credentials}'
+
+        # Create a temp log file with 100 lines
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tf:
+            for i in range(100):
+                tf.write(f"line {i}\n")
+            tf.flush()
+            temp_path = tf.name
+
+        handler = self._create_handler(auth_header=auth_header, path='/health')
+        # Patch the log file path function to return our temp file
+        with patch('lib.health_server.get_current_log_file_path', return_value=temp_path):
+            handler.do_GET()
+            body = handler.wfile.getvalue()
+
+            # Last 50 lines should include 'line 50' and 'line 99' but not 'line 49'
+            self.assertIn(b'line 50', body)
+            self.assertIn(b'line 99', body)
+            self.assertNotIn(b'line 49', body)
+
+        try:
+            import os
+            os.unlink(temp_path)
+        except Exception:
+            pass
+
 
 
 class TestHealthServer(unittest.TestCase):

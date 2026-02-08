@@ -2,6 +2,7 @@
 from typing import Dict, Optional
 from .config import config
 from .logging_utils import logger
+from .version import __version__
 
 
 def get_openapi_spec(host: Optional[str] = None) -> Dict:
@@ -36,7 +37,7 @@ def get_openapi_spec(host: Optional[str] = None) -> Dict:
         "openapi": "3.0.0",
         "info": {
             "title": "Door Controller API",
-            "version": config.get("__version__", "0.0.0"),
+            "version": __version__,
             "description": "API endpoints for managing and inspecting the Door Controller"
         },
         "servers": [{"url": server_url}],
@@ -59,13 +60,6 @@ def get_openapi_spec(host: Optional[str] = None) -> Dict:
                         "500": {"description": "Internal server error"},
                         "503": {"description": "Service unavailable (no refresh callback)"}
                     },
-                    "security": [{"basicAuth": []}]
-                }
-            },
-            "/health": {
-                "get": {
-                    "summary": "Health page (HTML)",
-                    "responses": {"200": {"description": "HTML health dashboard"}},
                     "security": [{"basicAuth": []}]
                 }
             }

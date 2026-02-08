@@ -1,7 +1,6 @@
 """Logging utilities with local file and Google Sheets integration."""
 import logging
 from logging.handlers import TimedRotatingFileHandler
-import time
 import threading
 from typing import Optional
 from datetime import datetime, date, timedelta
@@ -124,36 +123,11 @@ def record_action(action: str, badge_id: Optional[str] = None, status: str = "Su
         log.error(message)
 
 
-def log_to_google_sheets(log_sheet, uid: str, status: str) -> bool:
-    """
-    Attempt to log access event to Google Sheets (best-effort).
-
-    Args:
-        log_sheet: Google Sheets worksheet object
-        uid: Badge UID or action description
-        status: Status of the access attempt
-
-    Returns:
-        True if successful, False otherwise
-    """
-    global last_google_log_success, last_google_error
-
-    try:
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        log_sheet.append_row([timestamp, uid, status])
-
-        with timestamp_lock:
-            last_google_log_success = datetime.now()
-
-        get_logger().debug(f"Successfully logged to Google Sheets: {uid} - {status}")
-        return True
-
-    except Exception as e:
-        with timestamp_lock:
-            last_google_error = str(e)
-
-        get_logger().warning(f"Failed to log to Google Sheets: {e}")
-        return False
+def update_last_google_error(message: str):
+    """Update the last Google Sheets error message."""
+    global last_google_error
+    with timestamp_lock:
+        last_google_error = message
 
 
 def update_last_google_log_success():
