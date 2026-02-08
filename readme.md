@@ -1,6 +1,344 @@
-# badge scanner
-* python
+# Door Controller - RFID Access Control System
+
+Python 3 Raspberry Pi Zero RFID door access control system with cloud-based badge management, health monitoring, and robust logging.
+
+## Features
+
+- **NFC/RFID Badge Authentication**: PN532-based badge reader with Google Sheets integration
+- **Physical Controls**: Manual unlock (1-hour) and lock buttons
+- **Health Monitoring**: Web-based health dashboard with real-time system status
+- **Robust Logging**: 7-day rotating local logs with Google Sheets failover
+- **Systemd Integration**: Auto-restart on failure with watchdog heartbeat
+- **Thread-Safe**: Concurrent button monitoring and RFID scanning
+- **Failover Support**: Local CSV backup when Google Sheets unavailable
+
+## Hardware Requirements
+
+- Raspberry Pi Zero (or any Raspberry Pi with GPIO)
+- PN532 NFC/RFID Reader (I2C)
+- Relay module (for door latch control)
+- 2x Push buttons (unlock/lock)
+- Door latch/strike (controlled via relay)
+
+## GPIO Pin Configuration
+
+Default pin assignments (configurable via `config.py` or environment variables):
+
+- **GPIO 17**: Relay control (door latch)
+- **GPIO 27**: Unlock button (1-hour unlock)
+- **GPIO 22**: Lock button (manual lock override)
+- **I2C**: PN532 NFC reader (SDA/SCL)
+
+## Installation
+
+### 1. Clone the Repository
+
+```bash
+git clone <repository-url>
+cd badge_scanner
+```
+
+### 2. Set Up Python Virtual Environment
+
+```bash
+python3 -m venv venv
+source venv/bin/activate  # On Linux/macOS
+# or
+venv\Scripts\activate  # On Windows
+```
+
+### 3. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Configure Google Sheets API
+
+1. Create a Google Cloud Project
+2. Enable Google Sheets API and Google Drive API
+3. Create a Service Account and download credentials
+4. Save credentials as `creds.json` in the project directory
+5. Share your Google Sheets with the service account email
+
+### 5. Create Google Sheets
+
+Create two Google Sheets:
+
+1. **Badge List - Access Control**: Contains authorized badge UIDs (column 1)
+2. **Access Door Log**: Logs all access attempts (timestamp, UID, status)
+
+### 6. Configure Application
+
+Edit `config.py` or set environment variables:
+
+```bash
+export DOOR_HEALTH_PORT=8080
+export DOOR_HEALTH_USERNAME=admin
+export DOOR_HEALTH_PASSWORD=changeme
+```
+
+### Development on Windows (no Raspberry Pi)
+
+You can run the application locally on Windows for development without GPIO/PN532 hardware. The `start.py` script will automatically fall back to lightweight stubs if the hardware libraries are not available.
+
+Recommended (optional): install a GPIO emulator package so code that imports `RPi.GPIO` still works:
+
+```bash
+pip install "RPi.GPIO-emulator"
+```
+
+If `RPi.GPIO` is not present, the project uses a local stub (`lib/gpio_stub.py`) and a PN532 stub (`lib/pn532_stub.py`) so you can run `python start.py` for UI/logic development and debugging.
+
+Development helper scripts:
+
+- Windows PowerShell: `.\scripts\run_dev.ps1 -Install` (installs dependencies and runs `start.py`)
+- Linux/macOS: `./scripts/run_dev.sh install` (installs dependencies and runs `start.py`)
+
+## Running the Application
+
+### Manual Execution
+
+```bash
+# Activate virtual environment
+source venv/bin/activate
+
+# Run application
+python3 start.py
+```
+
+### Systemd Service (Production)
+
+1. Copy the service file:
+
+```bash
+sudo cp door.service /etc/systemd/system/
+```
+
+2. Edit service file paths:
+
+```bash
+sudo nano /etc/systemd/system/door.service
+```
+
+Update `WorkingDirectory` and `ExecStart` paths to match your installation.
+
+3. Enable and start service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable door.service
+sudo systemctl start door.service
+```
+
+4. Check status:
+
+```bash
+sudo systemctl status door.service
+```
+
+5. View logs:
+
+```bash
+sudo journalctl -u door.service -f
+```
+
+## Health Monitoring
+
+The application provides a web-based health dashboard at:
+
+```
+http://<raspberry-pi-ip>:8080/health
+```
+
+**Default credentials**: `admin` / `changeme` (change in config!)
+
+### Health Page Information
+
+- Door status (OPEN/CLOSED)
+- Last local log entry timestamp
+- Last successful Google Sheets log
+- Last badge list download
+- Application uptime
+- PN532 reader status (last success/error)
+- Google Sheets status (last error)
+- Log file size and disk space
+- Auto-refreshes every 30 seconds
+
+## Logging System
+
+### Local Logs
+
+- **Location**: `door_controller.log`
+- **Rotation**: Daily, keeps 7 days
+- **Content**: All door actions, badge scans, errors
+
+### Google Sheets Logging
+
+- **Best-effort**: Never crashes app on failure
+- **Failover**: Falls back to local-only logging
+- **Logged Events**:
+  - Badge scans (granted/denied)
+  - Manual unlock/lock actions
+  - System errors
+
+## Systemd Watchdog
+
+The application writes a heartbeat every 10 seconds to `/tmp/door_controller_watchdog.txt`.
+
+Configure systemd to monitor this file:
+
+```ini
+[Service]
+ExecStartPre=/bin/sh -c 'echo 0 > /tmp/door_controller_watchdog.txt'
+Restart=always
+RestartSec=5
+```
+
+Systemd will auto-restart the service if it crashes or hangs.
+
+## Testing
+
+### Run Unit Tests
+
+```bash
+# Activate virtual environment
+source venv/bin/activate
+
+# Run all tests
+python -m unittest discover -s tests -p "test_*.py" -v
+```
+
+### Run Specific Test Module
+
+```bash
+python -m unittest tests.test_logging_utils -v
+```
+
+### Test Coverage
+
+```bash
+pip install coverage
+coverage run -m unittest discover -s tests
+coverage report -m
+coverage html  # Generates htmlcov/index.html
+```
+
+## Continuous Integration
+
+GitHub Actions automatically runs tests on push/PR to main/develop branches.
+
+See `.github/workflows/tests.yml` for CI configuration.
+
+Tests run on Python 3.9, 3.10, and 3.11.
+
+## Configuration Options
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOOR_RELAY_PIN` | 17 | GPIO pin for relay |
+| `DOOR_UNLOCK_PIN` | 27 | GPIO pin for unlock button |
+| `DOOR_LOCK_PIN` | 22 | GPIO pin for lock button |
+| `DOOR_UNLOCK_DURATION` | 3600 | Unlock duration (seconds) |
+| `DOOR_HEALTH_PORT` | 8080 | Health server port |
+| `DOOR_HEALTH_USERNAME` | admin | Health page username |
+| `DOOR_HEALTH_PASSWORD` | changeme | Health page password |
+
+### Config File
+
+Create `config.json` to override defaults:
+
+```json
+{
+  "RELAY_PIN": 17,
+  "UNLOCK_DURATION": 3600,
+  "HEALTH_SERVER_PORT": 8080
+}
+```
+
+## Architecture
+
+### Modules
+
+- **`start.py`**: Main application entry point
+- **`config.py`**: Configuration management
+- **`logging_utils.py`**: Logging system (local + Google Sheets)
+- **`door_control.py`**: Door status tracking and GPIO control
+- **`health_server.py`**: HTTP health monitoring server
+- **`watchdog.py`**: Systemd watchdog heartbeat
+
+### Thread Model
+
+- **Main thread**: Initialization and thread management
+- **Button monitor thread**: Polls unlock/lock buttons
+- **RFID monitor thread**: Reads PN532 and authenticates badges
+- **Health server thread**: HTTP server (daemon)
+- **Watchdog thread**: Heartbeat updates (daemon)
+
+## Troubleshooting
+
+### Service won't start
+
+```bash
+# Check service status
+sudo systemctl status door.service
+
+# View detailed logs
+sudo journalctl -u door.service -n 50
+```
+
+### GPIO permissions
+
+```bash
+# Add user to gpio group
+sudo usermod -a -G gpio $USER
+
+# Reboot required
+sudo reboot
+```
+
+### PN532 not detected
+
+```bash
+# Check I2C devices
+sudo i2cdetect -y 1
+
+# Should show device at 0x24
+```
+
+### Google Sheets errors
+
+- Verify `creds.json` is valid
+- Check service account has access to sheets
+- Ensure internet connectivity
+- Check local logs: `tail -f door_controller.log`
+
+### Health page not accessible
+
+- Check firewall: `sudo ufw allow 8080`
+- Verify port in config matches URL
+- Check server started: `netstat -tuln | grep 8080`
+
+## Security Considerations
+
+1. **Change default health page credentials** immediately
+2. Use HTTPS reverse proxy (nginx) for production health page
+3. Restrict health page access via firewall rules
+4. Keep `creds.json` secure (never commit to git)
+5. Regularly rotate Google service account keys
+6. Review access logs periodically
+
+## License
+
+[Your License Here]
+
+## Support
+
+[Your Support Information Here]
 
 ## check service
 * systemctl cat door.service
 * systemctl --type=service --state=running
+

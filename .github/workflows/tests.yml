@@ -1,0 +1,142 @@
+name: Tests
+
+on:
+  # push:
+    # branches: [ main, develop ]
+  pull_request:
+    # branches: [ main, develop ]
+  workflow_dispatch:
+
+permissions:
+  checks: write
+  contents: read
+  pull-requests: write
+  security-events: write # required for SARIF upload
+  actions: read
+
+env:
+  retention_days: 3 # Default artifact retention days
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ['3.9']
+    # , '3.10', '3.11'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Fetch full git history for version calculation
+
+    - name: Install GitVersion
+      uses: gittools/actions/gitversion/setup@v4.1.0
+      with:
+        versionSpec: "6.3.x"
+
+    - name: Determine Version
+      id: version_step # step id used as a reference for output values
+      uses: gittools/actions/gitversion/execute@v4.1.0
+      env:
+        DOTNET_GITVERSION_TELEMETRY_OPTOUT: 1
+      with:
+        configFilePath: ./GitVersion.yml
+
+    - name: Extract version information
+      id: extract-version
+      run: |
+        # Read GitVersion output and replace PullRequest with Patch
+        VERSION="${{ steps.version_step.outputs.SemVer }}"
+        # make 0.1.0-PullRequest99.190 to 0.1.0-Patch99.190
+        VERSION=$(echo "$VERSION" | sed 's/PullRequest/Patch/g')
+        FULL_SEMVER="${{ steps.version_step.outputs.FullSemVer }}"
+        MAJOR_MINOR_PATCH="${{ steps.version_step.outputs.MajorMinorPatch }}"
+        GIT_HASH="${{ steps.version_step.outputs.Sha }}"
+        GIT_TAG="${{ steps.version_step.outputs.PreReleaseTag }}"
+        GIT_BRANCH="${{ steps.version_step.outputs.BranchName }}"
+        COMMIT_COUNT="${{ steps.version_step.outputs.CommitsSinceVersionSource }}"
+        BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+        # Create version.txt content
+        cat > version-$VERSION.txt << EOF
+        version=$VERSION
+        major_minor_patch=$MAJOR_MINOR_PATCH
+        full_semver=$FULL_SEMVER
+        git_hash=$GIT_HASH
+        git_tag=$GIT_TAG
+        git_branch=$GIT_BRANCH
+        commit_count=$COMMIT_COUNT
+        build_date=$BUILD_DATE
+        EOF
+
+        # Output version for other steps
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "MAJOR_MINOR_PATCH=$MAJOR_MINOR_PATCH" >> $GITHUB_OUTPUT
+        echo "FULL_SEMVER=$FULL_SEMVER" >> $GITHUB_OUTPUT
+        echo "GIT_HASH=$GIT_HASH" >> $GITHUB_OUTPUT
+        echo "GIT_TAG=$GIT_TAG" >> $GITHUB_OUTPUT
+        echo "GIT_BRANCH=$GIT_BRANCH" >> $GITHUB_OUTPUT
+        echo "COMMIT_COUNT=$COMMIT_COUNT" >> $GITHUB_OUTPUT
+
+        # Display version info
+        echo "Generated version: $VERSION"
+        echo "Major minor patch: $MAJOR_MINOR_PATCH"
+        echo "Full semver: $FULL_SEMVER"
+        echo "Git hash: $GIT_HASH"
+        echo "Git branch: $GIT_BRANCH"
+        echo "Commit count: $COMMIT_COUNT"
+        echo "Build date: $BUILD_DATE"
+        echo "version.txt content:"
+        cat version-$VERSION.txt
+
+    - name: Update project files with version
+      run: |
+        chmod +x scripts/updateVersion.sh
+        bash scripts/updateVersion.sh
+
+    - name: Upload version.txt as artifact
+      uses: actions/upload-artifact@v4
+      continue-on-error: true
+      with:
+        name: version-info
+        path: version-${{ steps.extract-version.outputs.VERSION }}.txt
+        retention-days: ${{ env.retention_days }}
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install xmlrunner
+
+    - name: Run unit tests and generate JUnit XML
+      run: |
+        mkdir -p test-results
+        python -m xmlrunner discover -s tests -p "test_*.py" -o test-results
+
+    - name: Publish unit test results
+      if: always()
+      uses: EnricoMi/publish-unit-test-result-action@v2
+      with:
+        files: test-results/*.xml
+
+    - name: Test coverage (Python 3.11 only)
+      if: matrix.python-version == '3.11'
+      run: |
+        pip install coverage
+        coverage run -m unittest discover -s tests -p "test_*.py"
+        coverage report -m
+        coverage html
+
+    - name: Upload coverage report
+      if: matrix.python-version == '3.11'
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: htmlcov/
