@@ -20,8 +20,8 @@ class TestWatchdog(unittest.TestCase):
         self.heartbeat_file = self.temp_file.name
         self.temp_file.close()
 
-        # Patch logger
-        self.logger_patcher = patch('lib.watchdog.get_logger')
+        # Patch the provider used by Watchdog (patch the symbol in watchdog module)
+        self.logger_patcher = patch('lib.watchdog.get_watchdog_logger')
         self.mock_logger = self.logger_patcher.start()
         self.mock_logger.return_value = Mock()
 
