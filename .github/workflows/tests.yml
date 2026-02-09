@@ -148,15 +148,14 @@ jobs:
 
   automerge:
     needs: test
-    name: Auto-merge Dependabot PRs
+    name: Auto-merge PR if tests pass
     if: (github.actor == 'dependabot[bot]' || github.actor == 'imgbot[bot]') && needs.test.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Merge PR
-        uses: peter-evans/merge-pull-request@v4
+        uses: peter-evans/enable-pull-request-automerge@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           merge-method: squash
           pull-request-number: ${{ github.event.pull_request.number }}
-          commit-title: "chore: auto-merge dependency update"
 
