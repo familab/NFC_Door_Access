@@ -152,11 +152,11 @@ jobs:
     if: (github.actor == 'dependabot[bot]' || github.actor == 'imgbot[bot]') && needs.test.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
       - name: Merge PR
-        run: gh pr merge "$PR_URL" --merge
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
+        uses: peter-evans/merge-pull-request@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          merge-method: squash
+          pull-request-number: ${{ github.event.pull_request.number }}
+          commit-title: "chore: auto-merge dependency update"
 
