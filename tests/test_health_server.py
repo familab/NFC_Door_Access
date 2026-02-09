@@ -61,6 +61,55 @@ class TestServerStateFunctions(unittest.TestCase):
         self.assertGreaterEqual(disk["free_mb"], 0)
         self.assertGreaterEqual(disk["total_mb"], 0)
 
+    def test_get_disk_space_cache(self):
+        """Ensure disk space is cached for the configured duration and refreshed after expiry."""
+        from datetime import datetime, timedelta
+
+        # Patch config to set a cache duration and patch os.statvfs to provide controllable values
+        class FakeStat:
+            def __init__(self, bavail, frsize, blocks):
+                self.f_bavail = bavail
+                self.f_frsize = frsize
+                self.f_blocks = blocks
+
+        with patch('lib.server.state.config', {"HEALTH_CACHE_DURATION_MINUTES": 5}):
+            with patch.object(server_state.os, 'statvfs', return_value=FakeStat(50, 1024, 200), create=True):
+                d1 = server_state.get_disk_space()
+
+            # Change the underlying statvfs return value
+            with patch.object(server_state.os, 'statvfs', return_value=FakeStat(10, 1024, 200), create=True):
+                d2 = server_state.get_disk_space()
+                # Should be cached, so values remain the same
+                self.assertEqual(d1, d2)
+
+            # Expire cache and ensure new values are fetched
+            server_state._disk_space_cache['modified'] = datetime.now() - timedelta(minutes=10)
+            with patch.object(server_state.os, 'statvfs', return_value=FakeStat(10, 1024, 200), create=True):
+                d3 = server_state.get_disk_space()
+                self.assertNotEqual(d1, d3)
+
+    def test_get_local_ips_cache(self):
+        """Ensure local IPs are cached and refreshed after expiry."""
+        from datetime import datetime, timedelta
+
+        # First value: one IP, second value: another IP
+        ai = [(2, None, None, None, ('1.2.3.4', 0))]
+        bi = [(2, None, None, None, ('5.6.7.8', 0))]
+
+        with patch('lib.server.state.config', {"HEALTH_CACHE_DURATION_MINUTES": 5}):
+            with patch('socket.getaddrinfo', return_value=ai):
+                ips1 = server_state.get_local_ips()
+            with patch('socket.getaddrinfo', return_value=bi):
+                ips2 = server_state.get_local_ips()
+                # Should be cached, so ips2 equals ips1
+                self.assertEqual(ips1, ips2)
+
+            # Expire cache and verify updated value is returned
+            server_state._local_ips_cache['modified'] = datetime.now() - timedelta(minutes=10)
+            with patch('socket.getaddrinfo', return_value=bi):
+                ips3 = server_state.get_local_ips()
+                self.assertNotEqual(ips1, ips3)
+
 
 class TestRequestHandler(unittest.TestCase):
     """Test cases for HTTP request handler (public vs authenticated routes)."""
@@ -157,6 +206,57 @@ class TestRequestHandler(unittest.TestCase):
         body = handler.wfile.getvalue()
         self.assertIn(b"SwaggerUIBundle", body)
         self.assertIn(b"favicon.ico", body)
+
+    def test_concurrent_health_requests(self):
+        """Health server should handle concurrent requests without blocking (threaded server)."""
+        import urllib.request
+        import time
+        import threading
+        import lib.server.routes_public as rp
+
+        hs = server.HealthServer(port=0)
+        hs.start()
+        try:
+            # Wait for server to be created
+            timeout = time.time() + 5
+            while (hs.server is None or getattr(hs.server, 'server_address', None) is None) and time.time() < timeout:
+                time.sleep(0.01)
+            if hs.server is None:
+                self.fail("Health server did not start")
+            port = hs.server.server_address[1]
+
+            # Replace send_health_page with a slower version to simulate blocking work
+            orig = rp.send_health_page
+
+            def slow_send(handler):
+                time.sleep(0.5)
+                return orig(handler)
+
+            results = []
+
+            def do_request():
+                url = f'http://127.0.0.1:{port}/health'
+                try:
+                    with urllib.request.urlopen(url, timeout=5) as r:
+                        results.append(r.read())
+                except Exception as e:
+                    results.append(e)
+
+            with patch('lib.server.routes_public.send_health_page', slow_send):
+                t0 = time.time()
+                threads = [threading.Thread(target=do_request) for _ in range(2)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join(timeout=3)
+                elapsed = time.time() - t0
+
+            # If the server is single-threaded, the two requests would take ~1.0s (sum of sleeps);
+            # with ThreadingHTTPServer they should complete close to the single sleep duration.
+            self.assertTrue(elapsed < 1.2, f"Requests took too long: {elapsed}")
+            self.assertEqual(len(results), 2)
+        finally:
+            hs.stop()
 
     def test_admin_requires_auth(self):
         """GET /admin without auth returns 401."""

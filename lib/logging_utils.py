@@ -319,19 +319,40 @@ def log_pn532_success():
     get_logger().debug("PN532 read successful")
 
 
+# Simple cache for log file size to avoid repeated filesystem stat calls
+_log_size_cache = {"modified": None, "size": 0}
+_log_size_cache_lock = threading.Lock()
+
+
 def get_log_file_size() -> int:
     """
     Get the size of the current log file in bytes.
 
+    Results are cached for `HEALTH_CACHE_DURATION_MINUTES` (default 5) to reduce
+    repeated filesystem calls during frequent health checks.
+
     Returns:
         File size in bytes, or 0 if file doesn't exist
     """
+    from datetime import datetime, timedelta
+
+    duration = int(config.get("HEALTH_CACHE_DURATION_MINUTES", 5) or 5)
+    with _log_size_cache_lock:
+        modified = _log_size_cache["modified"]
+        if modified and (datetime.now() - modified) <= timedelta(minutes=duration):
+            return int(_log_size_cache["size"])
+
     import os
     log_file = get_current_log_file_path()
     try:
-        return os.path.getsize(log_file)
+        size = os.path.getsize(log_file)
     except FileNotFoundError:
-        return 0
+        size = 0
+
+    with _log_size_cache_lock:
+        _log_size_cache["modified"] = datetime.now()
+        _log_size_cache["size"] = size
+    return size
 
 
 def _parse_log_base(log_file: str):

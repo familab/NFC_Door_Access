@@ -3,7 +3,7 @@ import base64
 import json
 import socket
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 
 from ..config import config
@@ -154,7 +154,11 @@ class HealthServer:
     """HTTP server manager (same API as before for start.py compatibility)."""
 
     def __init__(self, port: Optional[int] = None):
-        self.port = port or config["HEALTH_SERVER_PORT"]
+        # Allow port 0 (ephemeral port) so tests can start on an available port.
+        if port is not None:
+            self.port = port
+        else:
+            self.port = config["HEALTH_SERVER_PORT"]
         self.server = None
         self.thread = None
         self.running = False
@@ -168,8 +172,10 @@ class HealthServer:
 
         def run_server():
             try:
-                self.server = HTTPServer(("0.0.0.0", self.port), RequestHandler)
-                self.logger.info(f"Health server started on port {self.port}")
+                # Use ThreadingHTTPServer so multiple requests are handled concurrently
+                self.server = ThreadingHTTPServer(("0.0.0.0", self.port), RequestHandler)
+                actual_port = self.server.server_address[1] if self.server else self.port
+                self.logger.info(f"Health server started on port {actual_port}")
                 self.server.serve_forever()
             except Exception as e:
                 self.logger.error(f"Health server error: {e}")

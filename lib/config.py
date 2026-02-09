@@ -38,6 +38,9 @@ DEFAULT_CONFIG = {
     "HEALTH_SERVER_PASSWORD": "changeme",
     "HEALTH_REFRESH_INTERVAL": 300,  # 5 minutes
 
+    # Health cache duration: how long (minutes) to keep health metrics cached
+    "HEALTH_CACHE_DURATION_MINUTES": 5,
+
     # Badge refresh scheduling
     "BADGE_REFRESH_INTERVAL_SECONDS": 24 * 60 * 60,
 
