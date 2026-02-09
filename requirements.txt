@@ -10,7 +10,7 @@ oauth2client==4.1.3
 
 # Adafruit PN532 NFC/RFID reader
 adafruit-circuitpython-pn532==2.4.7
-adafruit-blinka==8.69.0
+adafruit-blinka==8.47.0
 
 # Required by Adafruit libraries (transitive dependencies)
 adafruit-circuitpython-busdevice==5.2.15
