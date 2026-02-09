@@ -5,8 +5,9 @@
 
 version: 2
 updates:
-  - package-ecosystem: "npm" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  - package-ecosystem: "pip" # Keep Python dependencies in requirements.txt up-to-date
+    directory: "/" # Location of package manifests (requirements.txt, requirements-windows.txt)
     schedule:
       interval: "weekly"
-      
+    open-pull-requests-limit: 10
+
