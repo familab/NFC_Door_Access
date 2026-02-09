@@ -3,6 +3,6 @@
 gspread==6.2.1
 oauth2client==4.1.3
 xmlrunner==1.7.7
-typing-extensions==4.12.2
+typing-extensions==4.15.0
 # Optional emulator package to provide RPi.GPIO compatibility
 RPi.GPIO-emulator
