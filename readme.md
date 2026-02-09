@@ -77,6 +77,16 @@ venv\Scripts\activate  # On Windows
 
 ### 3. Install Dependencies
 
+**For older Raspberry Pi models (Pi Zero, Pi 3, etc.):**
+
+First upgrade pip to avoid dependency resolver issues:
+
+```bash
+pip install --upgrade pip setuptools wheel
+```
+
+Then install the project dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -373,6 +383,27 @@ sudo systemctl status door-app.service
 
 # View detailed logs
 sudo journalctl -u door-app.service -n 50
+```
+
+### Pip install fails on older Raspberry Pi
+
+If you encounter dependency resolver errors or cryptography package issues on older Raspberry Pi models (Python 3.9 or earlier):
+
+```bash
+# Upgrade pip, setuptools, and wheel first
+pip install --upgrade pip setuptools wheel
+
+# Clear pip cache
+pip cache purge
+
+# Then install requirements
+pip install -r requirements.txt
+```
+
+If issues persist, try using the legacy resolver:
+
+```bash
+pip install --no-cache-dir --use-deprecated=legacy-resolver -r requirements.txt
 ```
 
 ### GPIO permissions
