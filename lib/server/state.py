@@ -27,6 +27,11 @@ _last_state_refresh_time = 0.0
 _rate_limit_seconds = 300  # 5 minutes
 _rate_limit_lock = threading.Lock()
 
+# Health caching (cached for a configurable number of minutes)
+_health_cache_lock = threading.Lock()
+_local_ips_cache = {"modified": None, "value": []}  # {'modified': datetime, 'value': List[str]}
+_disk_space_cache = {"modified": None, "value": {"free_mb": 0, "total_mb": 0, "used_mb": 0, "percent_used": 0}}
+
 
 def update_pn532_success():
     """Update the timestamp of the last successful PN532 read."""
@@ -96,7 +101,21 @@ def format_timestamp(dt: Optional[datetime]) -> str:
 
 
 def get_local_ips() -> List[str]:
-    """Return local IPv4 addresses, excluding 127.* and 172.*."""
+    """Return local IPv4 addresses, excluding 127.* and 172.*.
+
+    Results are cached for `HEALTH_CACHE_DURATION_MINUTES` (default 5) to avoid
+    repeated DNS/socket calls on each health page render. The cache stores a
+    `modified` datetime and the `value` list and is refreshed when older than the
+    configured duration.
+    """
+    from datetime import datetime, timedelta
+
+    duration = int(config.get("HEALTH_CACHE_DURATION_MINUTES", 5) or 5)
+    with _health_cache_lock:
+        modified = _local_ips_cache["modified"]
+        if modified and (datetime.now() - modified) <= timedelta(minutes=duration):
+            return list(_local_ips_cache["value"])
+
     ips = set()
     try:
         hostname = socket.gethostname()
@@ -117,7 +136,12 @@ def get_local_ips() -> List[str]:
             ips.add(ip)
     except Exception:
         pass
-    return sorted(ips)
+
+    val = sorted(ips)
+    with _health_cache_lock:
+        _local_ips_cache["modified"] = datetime.now()
+        _local_ips_cache["value"] = val
+    return val
 
 
 def get_uptime() -> str:
@@ -138,13 +162,24 @@ def get_uptime() -> str:
 
 
 def get_disk_space() -> dict:
-    """Disk space info (free_mb, total_mb, used_mb, percent_used)."""
+    """Disk space info (free_mb, total_mb, used_mb, percent_used).
+
+    Cached similarly to `get_local_ips` using `HEALTH_CACHE_DURATION_MINUTES`.
+    """
+    from datetime import datetime, timedelta
+
+    duration = int(config.get("HEALTH_CACHE_DURATION_MINUTES", 5) or 5)
+    with _health_cache_lock:
+        modified = _disk_space_cache["modified"]
+        if modified and (datetime.now() - modified) <= timedelta(minutes=duration):
+            return dict(_disk_space_cache["value"])
+
     try:
         stat = os.statvfs("/")
         free_bytes = stat.f_bavail * stat.f_frsize
         total_bytes = stat.f_blocks * stat.f_frsize
         used_bytes = total_bytes - free_bytes
-        return {
+        data = {
             "free_mb": free_bytes / (1024 * 1024),
             "total_mb": total_bytes / (1024 * 1024),
             "used_mb": used_bytes / (1024 * 1024),
@@ -152,7 +187,12 @@ def get_disk_space() -> dict:
         }
     except Exception as e:
         get_logger().warning(f"Failed to get disk space: {e}")
-        return {"free_mb": 0, "total_mb": 0, "used_mb": 0, "percent_used": 0}
+        data = {"free_mb": 0, "total_mb": 0, "used_mb": 0, "percent_used": 0}
+
+    with _health_cache_lock:
+        _disk_space_cache["modified"] = datetime.now()
+        _disk_space_cache["value"] = data
+    return data
 
 
 def read_log_tail(path: str, last_n: int) -> str:

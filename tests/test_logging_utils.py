@@ -165,6 +165,36 @@ class TestLoggingUtils(unittest.TestCase):
             if os.path.exists(log_file):
                 os.unlink(log_file)
 
+    def test_get_log_file_size_cache(self):
+        """Ensure get_log_file_size caches results and refreshes after expiry."""
+        import os
+        from datetime import datetime, timedelta
+
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"A" * 100)
+            log_file = f.name
+
+        try:
+            with patch('lib.logging_utils.config', {"LOG_FILE": log_file, "HEALTH_CACHE_DURATION_MINUTES": 5}):
+                size1 = logging_utils.get_log_file_size()
+                self.assertGreater(size1, 0)
+
+                # Shrink the file on disk
+                with open(log_file, 'wb') as f2:
+                    f2.write(b"B" * 10)
+
+                # Immediate call should return cached (old) size
+                size2 = logging_utils.get_log_file_size()
+                self.assertEqual(size1, size2)
+
+                # Expire cache and verify fresh value is returned
+                logging_utils._log_size_cache['modified'] = datetime.now() - timedelta(minutes=10)
+                size3 = logging_utils.get_log_file_size()
+                self.assertNotEqual(size1, size3)
+        finally:
+            if os.path.exists(log_file):
+                os.unlink(log_file)
+
     def test_log_pn532_error(self):
         """Test PN532 error logging."""
         with tempfile.NamedTemporaryFile(delete=False) as f:
