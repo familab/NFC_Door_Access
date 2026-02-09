@@ -36,7 +36,7 @@ DEFAULT_CONFIG = {
     "HEALTH_SERVER_PORT": 8080,
     "HEALTH_SERVER_USERNAME": "admin",
     "HEALTH_SERVER_PASSWORD": "changeme",
-    "HEALTH_REFRESH_INTERVAL": 30,
+    "HEALTH_REFRESH_INTERVAL": 300,  # 5 minutes
 
     # Badge refresh scheduling
     "BADGE_REFRESH_INTERVAL_SECONDS": 24 * 60 * 60,

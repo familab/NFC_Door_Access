@@ -17,7 +17,13 @@ from .logging_utils import (
 )
 from .data import GoogleSheetsData
 from .door_control import DoorController, set_door_status, get_door_status, get_door_status_updated
-from .health_server import HealthServer, update_pn532_success, update_pn532_error
+from .server import (
+    HealthServer,
+    update_pn532_success,
+    update_pn532_error,
+    start_health_server,
+    stop_health_server,
+)
 from .watchdog import start_watchdog, stop_watchdog, update_watchdog_heartbeat
 
 __all__ = [
@@ -43,6 +49,8 @@ __all__ = [
     'HealthServer',
     'update_pn532_success',
     'update_pn532_error',
+    'start_health_server',
+    'stop_health_server',
     'start_watchdog',
     'stop_watchdog',
     'update_watchdog_heartbeat',

@@ -12,9 +12,9 @@ class TestConfig(unittest.TestCase):
     def test_default_config(self):
         """Test that default configuration values are loaded."""
         config = Config()
-        self.assertEqual(config["RELAY_PIN"], 17)
-        self.assertEqual(config["UNLOCK_DURATION"], 3600)
-        self.assertEqual(config["HEALTH_SERVER_PORT"], 8080)
+        self.assertEqual(config["RELAY_PIN"], DEFAULT_CONFIG["RELAY_PIN"])
+        self.assertEqual(config["UNLOCK_DURATION"], DEFAULT_CONFIG["UNLOCK_DURATION"])
+        self.assertEqual(config["HEALTH_SERVER_PORT"], DEFAULT_CONFIG["HEALTH_SERVER_PORT"])
 
     def test_config_file_override(self):
         """Test that config file overrides defaults."""
@@ -29,7 +29,7 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(config["RELAY_PIN"], 99)
             self.assertEqual(config["UNLOCK_DURATION"], 7200)
             # Check that non-overridden values still use defaults
-            self.assertEqual(config["HEALTH_SERVER_PORT"], 8080)
+            self.assertEqual(config["HEALTH_SERVER_PORT"], DEFAULT_CONFIG["HEALTH_SERVER_PORT"])
         finally:
             os.unlink(config_file)
 
@@ -40,8 +40,8 @@ class TestConfig(unittest.TestCase):
 
         try:
             config = Config()
-            self.assertEqual(config["RELAY_PIN"], 42)
-            self.assertEqual(config["HEALTH_SERVER_PORT"], 9090)
+            self.assertEqual(config["RELAY_PIN"], int(os.environ["DOOR_RELAY_PIN"]))
+            self.assertEqual(config["HEALTH_SERVER_PORT"], int(os.environ["DOOR_HEALTH_PORT"]))
         finally:
             del os.environ["DOOR_RELAY_PIN"]
             del os.environ["DOOR_HEALTH_PORT"]

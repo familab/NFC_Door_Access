@@ -47,7 +47,7 @@ from lib.logging_utils import (
 )
 from lib.data import GoogleSheetsData
 from lib.door_control import DoorController, set_door_status, get_door_status
-from lib.health_server import start_health_server, stop_health_server, update_pn532_success, update_pn532_error, set_badge_refresh_callback
+from lib.server import start_health_server, stop_health_server, update_pn532_success, update_pn532_error, set_badge_refresh_callback
 from lib.watchdog import start_watchdog, stop_watchdog
 
 # GPIO Pin Definitions (from config)
@@ -84,8 +84,8 @@ data_client = GoogleSheetsData()
 data_client.connect()
 
 
-# Register badge refresh callback so it can be invoked from the health page
-from lib.health_server import set_badge_refresh_callback
+# Register badge refresh callback so it can be invoked from the admin page
+from lib.server import set_badge_refresh_callback
 
 def _refresh_badge_list():
     """Refresh badge list from Google Sheets and update local CSV backup.

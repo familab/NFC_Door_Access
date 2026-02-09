@@ -359,6 +359,19 @@ def get_current_log_file_path() -> str:
     return log_file
 
 
+def get_current_action_log_file_path() -> str:
+    """Return the path to the current (today's) action log file."""
+    action_log_file = config.get("ACTION_LOG_FILE")
+    if not action_log_file:
+        action_log_file = _build_derived_file(config["LOG_FILE"], "_action")
+    dated_path = _get_dated_log_path(action_log_file, date.today())
+    if os.path.exists(dated_path):
+        return dated_path
+    if os.path.exists(action_log_file):
+        return action_log_file
+    return dated_path
+
+
 def cleanup_old_logs(retention_days: Optional[int] = None):
     retention_days = retention_days or config["LOG_RETENTION_DAYS"]
     log_file = config["LOG_FILE"]
