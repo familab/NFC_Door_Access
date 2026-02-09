@@ -20,7 +20,7 @@ pyftdi==0.55.4
 
 # Google API dependencies
 google-auth==2.35.0
-httplib2==0.22.0
+httplib2==0.31.2
 
 # Test reporting for CI
 xmlrunner==1.7.7
