@@ -474,13 +474,25 @@ class TestRequestHandler(unittest.TestCase):
         handler.do_GET()
         body = handler.wfile.getvalue()
         self.assertIn(b"Door Metrics", body)
-        self.assertIn(b"Badge Scans Per Hour", body)
+        self.assertIn(b"Load/Refresh", body)
+        self.assertIn(b"Manual Load Data", body)
 
-    def test_metrics_api_graph_endpoint(self):
-        """GET /api/metrics/badge-scans-per-hour returns graph JSON payload."""
+    def test_metrics_reload_button_disabled_when_rate_limited(self):
+        """Metrics page shows disabled reload button when rate-limited."""
         credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
         auth_header = f"Basic {credentials}"
-        handler = self._create_handler(auth_header=auth_header, path="/api/metrics/badge-scans-per-hour")
+        with patch("lib.server.routes_metrics.get_seconds_until_next_metrics_reload", return_value=120):
+            handler = self._create_handler(auth_header=auth_header, path="/metrics")
+            handler.do_GET()
+            body = handler.wfile.getvalue()
+            self.assertIn(b"Manual Load Data (120s)", body)
+            self.assertIn(b"disabled", body)
+
+    def test_metrics_api_unified_endpoint_returns_events(self):
+        """GET /api/metrics returns structured events JSON payload."""
+        credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
+        auth_header = f"Basic {credentials}"
+        handler = self._create_handler(auth_header=auth_header, path="/api/metrics?start=2026-02-08&end=2026-02-08")
         with patch(
             "lib.server.routes_metrics.query_events_range",
             return_value=[
@@ -491,16 +503,16 @@ class TestRequestHandler(unittest.TestCase):
             handler.do_GET()
         body = handler.wfile.getvalue()
         self.assertIn(b"200", body)
-        self.assertIn(b'"labels"', body)
-        self.assertIn(b'"values"', body)
+        self.assertIn(b'"events"', body)
+        self.assertIn(b'"total_events": 2', body)
 
-    def test_metrics_timeline_pagination(self):
-        """GET /api/metrics/full-event-timeline returns paginated items."""
+    def test_metrics_pagination(self):
+        """GET /api/metrics with pagination returns paginated items."""
         credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
         auth_header = f"Basic {credentials}"
         handler = self._create_handler(
             auth_header=auth_header,
-            path="/api/metrics/full-event-timeline?page=1&page_size=1",
+            path="/api/metrics?start=2026-02-08&end=2026-02-08&page=1&page_size=1",
         )
         with patch(
             "lib.server.routes_metrics.query_events_range",
@@ -512,16 +524,16 @@ class TestRequestHandler(unittest.TestCase):
             handler.do_GET()
         body = handler.wfile.getvalue()
         self.assertIn(b"200", body)
-        self.assertIn(b'"total": 2', body)
+        self.assertIn(b'"total_events": 2', body)
         self.assertIn(b'"page_size": 1', body)
 
     def test_metrics_export_json(self):
-        """GET /api/metrics/export returns downloadable JSON for month."""
+        """GET /api/metrics?format=json returns JSON for range."""
         credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
         auth_header = f"Basic {credentials}"
-        handler = self._create_handler(auth_header=auth_header, path="/api/metrics/export?month=2026-02&format=json")
+        handler = self._create_handler(auth_header=auth_header, path="/api/metrics?start=2026-02-01&end=2026-02-01&format=json")
         with patch(
-            "lib.server.routes_metrics.query_month_events",
+            "lib.server.routes_metrics.query_events_range",
             return_value=[{"ts": "2026-02-01 10:00:00", "event_type": "Manual Lock", "badge_id": None, "status": "Success", "raw_message": "x"}],
         ):
             handler.do_GET()
@@ -530,12 +542,12 @@ class TestRequestHandler(unittest.TestCase):
         self.assertIn(b"Manual Lock", body)
 
     def test_metrics_export_csv(self):
-        """GET /api/metrics/export returns downloadable CSV for month."""
+        """GET /api/metrics?format=csv returns downloadable CSV for range."""
         credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
         auth_header = f"Basic {credentials}"
-        handler = self._create_handler(auth_header=auth_header, path="/api/metrics/export?month=2026-02&format=csv")
+        handler = self._create_handler(auth_header=auth_header, path="/api/metrics?start=2026-02-01&end=2026-02-01&format=csv")
         with patch(
-            "lib.server.routes_metrics.query_month_events",
+            "lib.server.routes_metrics.query_events_range",
             return_value=[{"ts": "2026-02-01 10:00:00", "event_type": "Manual Lock", "badge_id": None, "status": "Success", "raw_message": "x"}],
         ):
             handler.do_GET()

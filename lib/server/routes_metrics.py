@@ -1,13 +1,12 @@
-"""Metrics routes and JSON endpoints."""
+"""Metrics routes - unified API with IndexedDB caching frontend."""
 import json
 import math
-from collections import defaultdict, deque
 from datetime import date, datetime
 from urllib.parse import parse_qs
 
-from ..config import config
-from ..metrics_storage import month_events_to_csv, month_keys_in_range, query_events_range, query_month_events
-from .state import APPLICATION_JSON
+from ..metrics_storage import query_events_range, month_events_to_csv
+from .state import APPLICATION_JSON, check_rate_limit_metrics_reload
+from ..logging_utils import get_logger
 
 
 def _parse_date(value: str, default_value: date) -> date:
@@ -17,311 +16,16 @@ def _parse_date(value: str, default_value: date) -> date:
         return default_value
 
 
-def _parse_int(value: str, default_value: int, minimum: int = 1, maximum: int = 500) -> int:
+def _parse_int(value: str, default_value: int, minimum: int = 1, maximum: int = 10000) -> int:
     try:
         val = int(value)
-        if val < minimum:
-            return minimum
-        if val > maximum:
-            return maximum
-        return val
+        return max(minimum, min(maximum, val))
     except Exception:
         return default_value
 
 
 def _query_parts(raw_query: str):
     return parse_qs(raw_query or "", keep_blank_values=False)
-
-
-def _resolve_range(query_map):
-    now = datetime.now()
-    default_start = date(now.year, 1, 1)
-    default_end = date(now.year, now.month, now.day)
-    start_date = _parse_date((query_map.get("start_date", [default_start.isoformat()])[0]), default_start)
-    end_date = _parse_date((query_map.get("end_date", [default_end.isoformat()])[0]), default_end)
-    if start_date > end_date:
-        start_date, end_date = end_date, start_date
-    start_ts = datetime(start_date.year, start_date.month, start_date.day, 0, 0, 0)
-    end_ts = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59)
-    return start_date, end_date, start_ts, end_ts
-
-
-def _event_ts(event):
-    try:
-        return datetime.strptime(event["ts"], "%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return None
-
-
-def _status_is(event, expected):
-    return str(event.get("status", "")).strip().lower() == expected.lower()
-
-
-def _group_count(events, key_fn):
-    counter = defaultdict(int)
-    for event in events:
-        key = key_fn(event)
-        if key is not None:
-            counter[key] += 1
-    return counter
-
-
-def _door_open_durations(events):
-    durations = []
-    open_ts = None
-    for event in events:
-        event_type = event.get("event_type")
-        ts = _event_ts(event)
-        if ts is None:
-            continue
-        if event_type == "Door OPEN/UNLOCKED":
-            open_ts = ts
-        elif event_type == "Door CLOSED/LOCKED" and open_ts is not None:
-            if ts >= open_ts:
-                durations.append((open_ts, (ts - open_ts).total_seconds()))
-            open_ts = None
-    return durations
-
-
-def _filter_events(query_map):
-    start_date, end_date, start_ts, end_ts = _resolve_range(query_map)
-    events = query_events_range(
-        start_ts.strftime("%Y-%m-%d %H:%M:%S"),
-        end_ts.strftime("%Y-%m-%d %H:%M:%S"),
-    )
-    return start_date, end_date, events
-
-
-def send_metrics_page(handler, raw_query: str):
-    """Render metrics dashboard page."""
-    query = _query_parts(raw_query)
-    start_date, end_date, _, _ = _resolve_range(query)
-    months = month_keys_in_range(start_date, end_date)
-    page = _parse_int(query.get("page", ["1"])[0], 1)
-    per_page = _parse_int(query.get("per_page", ["1"])[0], 1, minimum=1, maximum=12)
-    total_pages = max(1, int(math.ceil(len(months) / float(per_page)))) if months else 1
-    page = min(page, total_pages)
-    page_start = (page - 1) * per_page
-    page_end = page_start + per_page
-    page_months = months[page_start:page_end] if months else []
-    selected_month = page_months[-1] if page_months else datetime.now().strftime("%Y-%m")
-    data_query = (
-        "start_date={0}&end_date={1}&page={2}&per_page={3}".format(
-            start_date.isoformat(), end_date.isoformat(), page, per_page
-        )
-    )
-
-    html = """<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Door Metrics</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    body { font-family: monospace; margin: 20px; background: #1e1e1e; color: #d4d4d4; }
-    h1, h2 { color: #4ec9b0; }
-    a { color: #9cdcfe; }
-    .toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
-    .card { background: #252526; border: 1px solid #555; border-radius: 8px; padding: 12px; }
-    .controls { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
-    button { background:#4ec9b0;color:#1e1e1e;padding:6px 10px;border:none;border-radius:4px;cursor:pointer; }
-    select,input { background:#1e1e1e;color:#d4d4d4;border:1px solid #555;padding:6px;border-radius:4px; }
-    table { border-collapse: collapse; width: 100%; margin-top: 8px; }
-    th, td { border: 1px solid #555; padding: 6px; text-align: left; }
-    th { background: #2d2d30; color: #4ec9b0; }
-  </style>
-</head>
-<body>
-  <h1>Door Metrics</h1>
-  <p><a href="/admin">Back to Admin</a> | <a href="/docs">API Docs</a></p>
-  <form class="toolbar" method="GET" action="/metrics">
-    <label>Start Date <input type="date" name="start_date" value="__START_DATE__"></label>
-    <label>End Date <input type="date" name="end_date" value="__END_DATE__"></label>
-    <label>Months/Page <input type="number" min="1" max="12" name="per_page" value="__PER_PAGE__"></label>
-    <label>Page <input type="number" min="1" name="page" value="__PAGE__"></label>
-    <button type="submit">Apply</button>
-  </form>
-  <p>Page __PAGE__ of __TOTAL_PAGES__ | Range months: __MONTH_COUNT__</p>
-  <div class="toolbar">
-    <label>Selected Month
-      <select id="selectedMonth">__MONTH_OPTIONS__</select>
-    </label>
-    <button id="downloadMonthCsv">Download Month CSV</button>
-    <button id="downloadMonthJson">Download Month JSON</button>
-  </div>
-  <div class="grid" id="chartsGrid"></div>
-  <div class="card">
-    <h2>Full Event Timeline</h2>
-    <table>
-      <thead><tr><th>Timestamp</th><th>Event</th><th>Badge</th><th>Status</th></tr></thead>
-      <tbody id="timelineRows"></tbody>
-    </table>
-    <div class="controls">
-      <button id="timelinePrev">Prev</button>
-      <button id="timelineNext">Next</button>
-      <span id="timelineMeta"></span>
-    </div>
-  </div>
-  <script>
-  (function() {
-    const filterQuery = "__DATA_QUERY__";
-    const selectedMonthEl = document.getElementById("selectedMonth");
-    const graphDefs = [
-      ["badge-scans-per-hour", "Badge Scans Per Hour", "bar"],
-      ["door-open-duration", "Door Open Duration Over Time", "line"],
-      ["top-badge-users", "Top Badge Users", "bar"],
-      ["door-cycles-per-day", "Door Cycles Per Day", "line"],
-      ["denied-badge-scans", "Denied Badge Scans", "line"],
-      ["badge-scan-door-open-latency", "Badge Scan → Door Open Latency", "line"],
-      ["manual-events", "Manual Unlock/Lock Events", "bar"],
-      ["door-left-open-too-long", "Door Left Open Too Long", "line"],
-      ["hourly-activity-heatmap", "Hourly Activity Heatmap", "bar"]
-    ];
-    const charts = {};
-
-    function downloadText(filename, contentType, text) {
-      const blob = new Blob([text], { type: contentType });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-    }
-
-    function chartToSvg(chart) {
-      const labels = chart.data.labels || [];
-      const values = ((chart.data.datasets || [])[0] || {}).data || [];
-      const width = 900;
-      const height = 320;
-      const maxVal = Math.max.apply(null, [1].concat(values));
-      const stepX = labels.length > 1 ? (width - 80) / (labels.length - 1) : (width - 80);
-      let points = "";
-      for (let i = 0; i < values.length; i++) {
-        const x = 40 + (i * stepX);
-        const y = height - 30 - ((values[i] / maxVal) * (height - 70));
-        points += x + "," + y + " ";
-      }
-      return [
-        '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '">',
-        '<rect width="100%" height="100%" fill="#1e1e1e" />',
-        '<polyline fill="none" stroke="#4ec9b0" stroke-width="2" points="' + points.trim() + '" />',
-        '</svg>'
-      ].join("");
-    }
-
-    function addCard(def) {
-      const id = def[0];
-      const title = def[1];
-      const card = document.createElement("div");
-      card.className = "card";
-      card.innerHTML = '<h2>' + title + '</h2>' +
-        '<canvas id="c-' + id + '" height="140"></canvas>' +
-        '<div class="controls">' +
-        '<button data-k="png">PNG</button><button data-k="svg">SVG</button>' +
-        '</div>';
-      const controls = card.querySelectorAll("button");
-      controls.forEach(function(btn) {
-        btn.addEventListener("click", function() {
-          const chart = charts[id];
-          if (!chart) return;
-          const month = selectedMonthEl.value || "month";
-          if (btn.dataset.k === "png") {
-            const a = document.createElement("a");
-            a.href = chart.toBase64Image();
-            a.download = id + "-" + month + ".png";
-            a.click();
-            return;
-          }
-          const svg = chartToSvg(chart);
-          downloadText(id + "-" + month + ".svg", "image/svg+xml", svg);
-        });
-      });
-      document.getElementById("chartsGrid").appendChild(card);
-    }
-
-    async function loadChart(def) {
-      const id = def[0];
-      const title = def[1];
-      const chartType = def[2];
-      const res = await fetch("/api/metrics/" + id + "?" + filterQuery, { credentials: "same-origin" });
-      const payload = await res.json();
-      const ctx = document.getElementById("c-" + id).getContext("2d");
-      charts[id] = new Chart(ctx, {
-        type: chartType,
-        data: {
-          labels: payload.labels || [],
-          datasets: [{ label: title, data: payload.values || [], borderColor: "#4ec9b0", backgroundColor: "rgba(78,201,176,0.35)" }]
-        },
-        options: { responsive: true, maintainAspectRatio: false }
-      });
-    }
-
-    let timelinePage = 1;
-    const timelineSize = 50;
-    async function loadTimeline() {
-      const res = await fetch("/api/metrics/full-event-timeline?" + filterQuery + "&page=" + timelinePage + "&page_size=" + timelineSize, { credentials: "same-origin" });
-      const payload = await res.json();
-      const rows = document.getElementById("timelineRows");
-      rows.innerHTML = "";
-      (payload.items || []).forEach(function(item) {
-        const tr = document.createElement("tr");
-        tr.innerHTML = "<td>" + item.ts + "</td><td>" + item.event_type + "</td><td>" + (item.badge_id || "") + "</td><td>" + item.status + "</td>";
-        rows.appendChild(tr);
-      });
-      document.getElementById("timelineMeta").textContent = "Page " + payload.page + " of " + payload.total_pages + " (" + payload.total + " items)";
-      document.getElementById("timelinePrev").disabled = payload.page <= 1;
-      document.getElementById("timelineNext").disabled = payload.page >= payload.total_pages;
-    }
-
-    document.getElementById("timelinePrev").addEventListener("click", function() {
-      timelinePage = Math.max(1, timelinePage - 1);
-      loadTimeline();
-    });
-    document.getElementById("timelineNext").addEventListener("click", function() {
-      timelinePage += 1;
-      loadTimeline();
-    });
-
-    document.getElementById("downloadMonthCsv").addEventListener("click", function() {
-      const month = selectedMonthEl.value;
-      location.href = "/api/metrics/export?month=" + month + "&format=csv";
-    });
-    document.getElementById("downloadMonthJson").addEventListener("click", function() {
-      const month = selectedMonthEl.value;
-      location.href = "/api/metrics/export?month=" + month + "&format=json";
-    });
-
-    graphDefs.forEach(addCard);
-    Promise.all(graphDefs.map(loadChart)).then(loadTimeline);
-  })();
-  </script>
-</body>
-</html>
-"""
-    month_options = "".join(
-        [
-            '<option value="{0}"{1}>{0}</option>'.format(
-                month_key, " selected" if month_key == selected_month else ""
-            )
-            for month_key in (page_months or [selected_month])
-        ]
-    )
-    html = (
-        html.replace("__START_DATE__", start_date.isoformat())
-        .replace("__END_DATE__", end_date.isoformat())
-        .replace("__PER_PAGE__", str(per_page))
-        .replace("__PAGE__", str(page))
-        .replace("__TOTAL_PAGES__", str(total_pages))
-        .replace("__MONTH_COUNT__", str(len(months)))
-        .replace("__DATA_QUERY__", data_query)
-        .replace("__MONTH_OPTIONS__", month_options)
-    )
-    handler.send_response(200)
-    handler.send_header("Content-type", "text/html; charset=utf-8")
-    handler.end_headers()
-    handler.wfile.write(html.encode("utf-8"))
 
 
 def _write_json(handler, payload, status_code=200):
@@ -331,193 +35,491 @@ def _write_json(handler, payload, status_code=200):
     handler.wfile.write(json.dumps(payload).encode("utf-8"))
 
 
-def _graph_badge_scans_per_hour(events):
-    data = [0] * 24
-    for event in events:
-        if event.get("event_type") != "Badge Scan":
-            continue
-        ts = _event_ts(event)
-        if ts is None:
-            continue
-        data[ts.hour] += 1
-    return {"labels": [str(i).zfill(2) for i in range(24)], "values": data}
+def handle_unified_metrics_api(handler, raw_query: str) -> bool:
+    """Unified GET /api/metrics endpoint.
 
-
-def _graph_door_open_duration(events):
-    durations = _door_open_durations(events)
-    bucket = defaultdict(list)
-    for ts, value in durations:
-        bucket[ts.date().isoformat()].append(value)
-    labels = sorted(bucket.keys())
-    values = [round(sum(bucket[k]) / float(len(bucket[k])), 3) for k in labels]
-    return {"labels": labels, "values": values}
-
-
-def _graph_top_badge_users(events):
-    counts = defaultdict(int)
-    for event in events:
-        if event.get("event_type") == "Badge Scan" and _status_is(event, "Granted"):
-            badge_id = event.get("badge_id") or "unknown"
-            counts[badge_id] += 1
-    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:10]
-    return {"labels": [x[0] for x in ordered], "values": [x[1] for x in ordered]}
-
-
-def _graph_door_cycles_per_day(events):
-    counts = _group_count(events, lambda e: _event_ts(e).date().isoformat() if e.get("event_type") == "Door OPEN/UNLOCKED" and _event_ts(e) else None)
-    labels = sorted(counts.keys())
-    return {"labels": labels, "values": [counts[x] for x in labels]}
-
-
-def _graph_denied_badge_scans(events):
-    counts = _group_count(
-        events,
-        lambda e: _event_ts(e).date().isoformat()
-        if e.get("event_type") == "Badge Scan" and _status_is(e, "Denied") and _event_ts(e)
-        else None,
-    )
-    labels = sorted(counts.keys())
-    return {"labels": labels, "values": [counts[x] for x in labels]}
-
-
-def _graph_badge_scan_latency(events):
-    scans_by_badge = defaultdict(deque)
-    pairs = []
-    for event in events:
-        ts = _event_ts(event)
-        if ts is None:
-            continue
-        event_type = event.get("event_type")
-        badge_id = event.get("badge_id")
-        if event_type == "Badge Scan" and _status_is(event, "Granted") and badge_id:
-            scans_by_badge[badge_id].append(ts)
-            continue
-        if event_type == "Door OPEN/UNLOCKED" and badge_id:
-            q = scans_by_badge.get(badge_id)
-            if q and len(q) > 0:
-                scan_ts = q.popleft()
-                if ts >= scan_ts:
-                    pairs.append((ts, (ts - scan_ts).total_seconds()))
-    labels = [p[0].strftime("%Y-%m-%d %H:%M:%S") for p in pairs]
-    values = [round(p[1], 3) for p in pairs]
-    return {"labels": labels, "values": values}
-
-
-def _graph_manual_events(events):
-    unlock_counts = defaultdict(int)
-    lock_counts = defaultdict(int)
-    for event in events:
-        ts = _event_ts(event)
-        if ts is None:
-            continue
-        day_key = ts.date().isoformat()
-        et = event.get("event_type")
-        if et == "Manual Unlock (1 hour)":
-            unlock_counts[day_key] += 1
-        elif et == "Manual Lock":
-            lock_counts[day_key] += 1
-    labels = sorted(set(list(unlock_counts.keys()) + list(lock_counts.keys())))
-    values = [unlock_counts[d] + lock_counts[d] for d in labels]
-    return {"labels": labels, "values": values}
-
-
-def _graph_door_left_open(events):
-    threshold = max(30, int(config.get("DOOR_UNLOCK_BADGE_DURATION", 5)) * 2)
-    durations = _door_open_durations(events)
-    over = defaultdict(int)
-    for ts, value in durations:
-        if value > threshold:
-            over[ts.date().isoformat()] += 1
-    labels = sorted(over.keys())
-    return {"labels": labels, "values": [over[d] for d in labels], "threshold_seconds": threshold}
-
-
-def _graph_heatmap(events):
-    grid = [[0 for _h in range(24)] for _d in range(7)]
-    for event in events:
-        ts = _event_ts(event)
-        if ts is None:
-            continue
-        grid[ts.weekday()][ts.hour] += 1
-    labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    # Flatten to keep Chart.js rendering lightweight.
-    flat_labels = []
-    flat_values = []
-    for day_index, day_name in enumerate(labels):
-        for hour in range(24):
-            flat_labels.append("{0}-{1:02d}".format(day_name, hour))
-            flat_values.append(grid[day_index][hour])
-    return {"labels": flat_labels, "values": flat_values}
-
-
-def _timeline(events, query):
-    page = _parse_int(query.get("page", ["1"])[0], 1)
-    page_size = _parse_int(query.get("page_size", ["50"])[0], 50, minimum=1, maximum=500)
-    total = len(events)
-    total_pages = max(1, int(math.ceil(total / float(page_size)))) if total else 1
-    page = min(page, total_pages)
-    start_idx = (page - 1) * page_size
-    end_idx = start_idx + page_size
-    items = events[start_idx:end_idx]
-    return {
-        "page": page,
-        "page_size": page_size,
-        "total": total,
-        "total_pages": total_pages,
-        "items": items,
-    }
-
-
-_GRAPH_HANDLERS = {
-    "badge-scans-per-hour": _graph_badge_scans_per_hour,
-    "door-open-duration": _graph_door_open_duration,
-    "top-badge-users": _graph_top_badge_users,
-    "door-cycles-per-day": _graph_door_cycles_per_day,
-    "denied-badge-scans": _graph_denied_badge_scans,
-    "badge-scan-door-open-latency": _graph_badge_scan_latency,
-    "manual-events": _graph_manual_events,
-    "door-left-open-too-long": _graph_door_left_open,
-    "hourly-activity-heatmap": _graph_heatmap,
-}
-
-
-def handle_metrics_api_get(handler, path: str, raw_query: str) -> bool:
-    """Handle GET /api/metrics/* endpoints."""
+    Returns all structured metrics data.
+    - Defaults: start=Jan 1 of current year, end=today
+    - Max range: 365 days
+    - Pagination supported
+    - NO raw_message field (for efficiency)
+    """
     query = _query_parts(raw_query)
-    if path == "/api/metrics/export":
-        month_key = query.get("month", [""])[0]
+
+    # Defaults
+    now = datetime.now()
+    default_start = date(now.year, 1, 1)
+    default_end = date(now.year, now.month, now.day)
+
+    start_date = _parse_date(query.get("start", [default_start.isoformat()])[0], default_start)
+    end_date = _parse_date(query.get("end", [default_end.isoformat()])[0], default_end)
+
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    # Validate 365-day max
+    date_range_days = (end_date - start_date).days
+    if date_range_days > 365:
+        _write_json(handler, {
+            "error": "Date range exceeds maximum of 365 days",
+            "requested_days": date_range_days,
+            "max_days": 365
+        }, status_code=400)
+        return True
+
+    # Pagination
+    page = _parse_int(query.get("page", ["1"])[0], 1)
+    page_size = _parse_int(query.get("page_size", ["5000"])[0], 5000, minimum=100, maximum=10000)
+
+    # Query
+    start_ts = datetime(start_date.year, start_date.month, start_date.day, 0, 0, 0)
+    end_ts = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59)
+
+    try:
+        all_events = query_events_range(
+            start_ts.strftime("%Y-%m-%d %H:%M:%S"),
+            end_ts.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+
+        # Strip raw_message
+        clean_events = [
+            {k: v for k, v in event.items() if k != "raw_message"}
+            for event in all_events
+        ]
+
+        # Handle CSV export if requested (returns full range as CSV)
         fmt = query.get("format", ["json"])[0].lower()
-        if not month_key:
-            _write_json(handler, {"error": "month is required"}, status_code=400)
-            return True
-        events = query_month_events(month_key)
         if fmt == "csv":
-            payload = month_events_to_csv(events)
+            payload = month_events_to_csv(clean_events)
             handler.send_response(200)
             handler.send_header("Content-type", "text/csv; charset=utf-8")
-            handler.send_header("Content-Disposition", 'attachment; filename="metrics-{0}.csv"'.format(month_key))
+            handler.send_header("Content-Disposition", f'attachment; filename="metrics-{start_date.isoformat()}_{end_date.isoformat()}.csv"')
             handler.end_headers()
             handler.wfile.write(payload.encode("utf-8"))
             return True
-        if fmt == "json":
-            handler.send_response(200)
-            handler.send_header("Content-type", "application/json; charset=utf-8")
-            handler.send_header("Content-Disposition", 'attachment; filename="metrics-{0}.json"'.format(month_key))
-            handler.end_headers()
-            handler.wfile.write(json.dumps(events).encode("utf-8"))
-            return True
-        _write_json(handler, {"error": "format must be csv or json"}, status_code=400)
+
+        # Paginate
+        total = len(clean_events)
+        total_pages = max(1, math.ceil(total / page_size)) if total else 1
+        page = min(page, total_pages)
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+
+        _write_json(handler, {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "page": page,
+            "page_size": page_size,
+            "total_events": total,
+            "total_pages": total_pages,
+            "events": clean_events[start_idx:end_idx]
+        })
         return True
 
-    if path == "/api/metrics/full-event-timeline":
-        _start, _end, events = _filter_events(query)
-        _write_json(handler, _timeline(events, query))
+    except Exception as e:
+        get_logger().error(f"Metrics query failed: {e}")
+        _write_json(handler, {"error": str(e)}, status_code=500)
         return True
 
-    graph_key = path.replace("/api/metrics/", "", 1)
-    graph_fn = _GRAPH_HANDLERS.get(graph_key)
-    if graph_fn is None:
-        return False
-    _start, _end, events = _filter_events(query)
-    _write_json(handler, graph_fn(events))
-    return True
+
+def send_metrics_page(handler, raw_query: str):
+    """Metrics dashboard with IndexedDB caching and client-side graphing."""
+
+    # Parse URL params for initial date range
+    query = _query_parts(raw_query)
+    now = datetime.now()
+    default_start = date(now.year, 1, 1)
+    default_end = date(now.year, now.month, now.day)
+
+    start_date = _parse_date(query.get("start", [default_start.isoformat()])[0], default_start)
+    end_date = _parse_date(query.get("end", [default_end.isoformat()])[0], default_end)
+
+    # Compute reload button state
+    metrics_reload_wait = 0
+    try:
+        from .state import get_seconds_until_next_metrics_reload
+        metrics_reload_wait = get_seconds_until_next_metrics_reload()
+    except Exception:
+        metrics_reload_wait = 0
+    reload_disabled = "disabled" if metrics_reload_wait > 0 else ""
+    reload_text = f"Manual Load Data ({metrics_reload_wait}s)" if metrics_reload_wait > 0 else "Manual Load Data"
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Door Metrics</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    body {{ font-family: monospace; margin: 20px; background: #1e1e1e; color: #d4d4d4; }}
+    h1, h2 {{ color: #4ec9b0; }}
+    a {{ color: #9cdcfe; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    .status {{ padding: 8px; margin-bottom: 16px; border-radius: 4px; }}
+    .status.loading {{ background: #2d2d30; color: #4ec9b0; }}
+    .status.cached {{ background: #2d4a2d; color: #6cc96c; }}
+    .status.error {{ background: #4a2d2d; color: #c96c6c; }}
+    .toolbar {{ display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }}
+    .card {{ background: #252526; border: 1px solid #555; border-radius: 8px; padding: 12px; }}
+    .controls {{ margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }}
+    button {{ background:#4ec9b0; color:#1e1e1e; padding:6px 10px; border:none; border-radius:4px; cursor:pointer; }}
+    button:disabled {{ opacity:0.5; cursor:not-allowed; }}
+    select, input {{ background:#1e1e1e; color:#d4d4d4; border:1px solid #555; padding:6px; border-radius:4px; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 11px; }}
+    th, td {{ border: 1px solid #555; padding: 4px; text-align: left; }}
+    th {{ background: #2d2d30; color: #4ec9b0; }}
+  </style>
+</head>
+<body>
+  <h1>Door Metrics</h1>
+  <p><a href="/admin">← Admin</a> | <a href="/docs">API Docs</a></p>
+
+  <div id="status" class="status loading">Initializing...</div>
+
+  <div class="toolbar">
+    <label>Start: <input type="date" id="startDate" value="{start_date.isoformat()}"></label>
+    <label>End: <input type="date" id="endDate" value="{end_date.isoformat()}"></label>
+    <button id="btnLoad">Load/Refresh</button>
+    <button id="btnClearCache">Clear Cache</button>
+    <button id="btnExportCSV">Export CSV</button>
+    <button id="btnReload" {reload_disabled}>{reload_text}</button>
+  </div>
+
+  <div class="grid" id="chartsGrid"></div>
+
+  <div class="card">
+    <h2>Event Timeline (Latest 100)</h2>
+    <table id="timelineTable">
+      <thead><tr><th>Time</th><th>Event</th><th>Badge</th><th>Status</th></tr></thead>
+      <tbody id="timelineBody"></tbody>
+    </table>
+  </div>
+
+  <script>
+// IndexedDB setup
+const DB_NAME = 'DoorMetrics';
+const DB_VERSION = 1;
+const STORE_NAME = 'events';
+
+let db = null;
+let charts = {{}};
+
+// Open IndexedDB
+async function openDB() {{
+  return new Promise((resolve, reject) => {{
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+    request.onupgradeneeded = (e) => {{
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {{
+        const store = db.createObjectStore(STORE_NAME, {{ keyPath: 'cacheKey' }});
+        store.createIndex('timestamp', 'timestamp');
+      }}
+    }};
+  }});
+}}
+
+// Clear auth-dependent cache (called on logout or error 401)
+async function clearCache() {{
+  const tx = db.transaction([STORE_NAME], 'readwrite');
+  await tx.objectStore(STORE_NAME).clear();
+  updateStatus('Cache cleared', 'cached');
+}}
+
+// Get cached data
+async function getCached(start, end) {{
+  const key = `${{start}}_${{end}}`;
+  const tx = db.transaction([STORE_NAME], 'readonly');
+  const cached = await tx.objectStore(STORE_NAME).get(key);
+  return cached ? cached.events : null;
+}}
+
+// Save to cache
+async function saveCache(start, end, events) {{
+  const key = `${{start}}_${{end}}`;
+  const tx = db.transaction([STORE_NAME], 'readwrite');
+  await tx.objectStore(STORE_NAME).put({{
+    cacheKey: key,
+    start,
+    end,
+    events,
+    timestamp: Date.now()
+  }});
+}}
+
+// Fetch from API (with pagination handling)
+async function fetchMetrics(start, end) {{
+  let allEvents = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages) {{
+    const url = `/api/metrics?start=${{start}}&end=${{end}}&page=${{page}}&page_size=5000`;
+    const res = await fetch(url, {{ credentials: 'same-origin' }});
+
+    if (res.status === 401) {{
+      await clearCache();
+      throw new Error('Not authenticated. Please log in.');
+    }}
+
+    if (!res.ok) {{
+      const err = await res.json();
+      throw new Error(err.error || 'API error');
+    }}
+
+    const data = await res.json();
+    allEvents = allEvents.concat(data.events);
+    totalPages = data.total_pages;
+    page++;
+  }}
+
+  return allEvents;
+}}
+
+// Load metrics (cache-first)
+async function loadMetrics() {{
+  const start = document.getElementById('startDate').value;
+  const end = document.getElementById('endDate').value;
+
+  if (!start || !end) {{
+    updateStatus('Please select start and end dates', 'error');
+    return;
+  }}
+
+  updateStatus('Loading...', 'loading');
+
+  try {{
+    // Try cache first
+    let events = await getCached(start, end);
+
+    if (events) {{
+      updateStatus(`Loaded ${{events.length}} events from cache`, 'cached');
+    }} else {{
+      // Fetch from API
+      events = await fetchMetrics(start, end);
+      await saveCache(start, end, events);
+      updateStatus(`Loaded ${{events.length}} events from server`, 'loading');
+    }}
+
+    renderDashboard(events);
+
+  }} catch (err) {{
+    updateStatus(`Error: ${{err.message}}`, 'error');
+    console.error(err);
+  }}
+}}
+
+// Update status message
+function updateStatus(msg, type) {{
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = `status ${{type}}`;
+}}
+
+// Render all charts and timeline
+function renderDashboard(events) {{
+  renderBadgeScansPerHour(events);
+  renderTopBadgeUsers(events);
+  renderDoorCyclesPerDay(events);
+  renderDeniedScans(events);
+  renderTimeline(events);
+}}
+
+// Badge scans per hour
+function renderBadgeScansPerHour(events) {{
+  const data = new Array(24).fill(0);
+  events.forEach(e => {{
+    if (e.event_type === 'Badge Scan') {{
+      const hour = new Date(e.ts).getHours();
+      data[hour]++;
+    }}
+  }});
+
+  const labels = Array.from({{length: 24}}, (_, i) => i.toString().padStart(2, '0'));
+  createChart('badge-scans', 'Badge Scans Per Hour', 'bar', labels, data);
+}}
+
+// Top badge users
+function renderTopBadgeUsers(events) {{
+  const counts = {{}};
+  events.forEach(e => {{
+    if (e.event_type === 'Badge Scan' && e.status?.toLowerCase() === 'granted') {{
+      const badge = e.badge_id || 'unknown';
+      counts[badge] = (counts[badge] || 0) + 1;
+    }}
+  }});
+
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const labels = sorted.map(x => x[0]);
+  const data = sorted.map(x => x[1]);
+
+  createChart('top-users', 'Top 10 Badge Users', 'bar', labels, data);
+}}
+
+// Door cycles per day
+function renderDoorCyclesPerDay(events) {{
+  const counts = {{}};
+  events.forEach(e => {{
+    if (e.event_type === 'Door OPEN/UNLOCKED') {{
+      const day = e.ts.split(' ')[0];
+      counts[day] = (counts[day] || 0) + 1;
+    }}
+  }});
+
+  const labels = Object.keys(counts).sort();
+  const data = labels.map(d => counts[d]);
+
+  createChart('door-cycles', 'Door Cycles Per Day', 'line', labels, data);
+}}
+
+// Denied scans
+function renderDeniedScans(events) {{
+  const counts = {{}};
+  events.forEach(e => {{
+    if (e.event_type === 'Badge Scan' && e.status?.toLowerCase() === 'denied') {{
+      const day = e.ts.split(' ')[0];
+      counts[day] = (counts[day] || 0) + 1;
+    }}
+  }});
+
+  const labels = Object.keys(counts).sort();
+  const data = labels.map(d => counts[d]);
+
+  createChart('denied-scans', 'Denied Badge Scans Per Day', 'line', labels, data);
+}}
+
+// Generic chart creator
+function createChart(id, title, type, labels, data) {{
+  let container = document.getElementById(id);
+  if (!container) {{
+    container = document.createElement('div');
+    container.className = 'card';
+    container.innerHTML = `<h2>${{title}}</h2><canvas id="chart-${{id}}"></canvas>`;
+    document.getElementById('chartsGrid').appendChild(container);
+  }}
+
+  const canvas = document.getElementById(`chart-${{id}}`);
+  if (charts[id]) charts[id].destroy();
+
+  charts[id] = new Chart(canvas, {{
+    type,
+    data: {{
+      labels,
+      datasets: [{{
+        label: title,
+        data,
+        borderColor: '#4ec9b0',
+        backgroundColor: 'rgba(78,201,176,0.3)'
+      }}]
+    }},
+    options: {{ responsive: true, maintainAspectRatio: false }}
+  }});
+}}
+
+// Timeline table
+function renderTimeline(events) {{
+  const tbody = document.getElementById('timelineBody');
+  tbody.innerHTML = '';
+
+  const latest = events.slice(-100).reverse();
+  latest.forEach(e => {{
+    const tr = tbody.insertRow();
+    tr.insertCell().textContent = e.ts;
+    tr.insertCell().textContent = e.event_type;
+    tr.insertCell().textContent = e.badge_id || '';
+    tr.insertCell().textContent = e.status;
+  }});
+}}
+
+// Export CSV
+function exportCSV() {{
+  const start = document.getElementById('startDate').value;
+  const end = document.getElementById('endDate').value;
+  window.location.href = `/api/metrics?start=${{start}}&end=${{end}}&format=csv`;
+}}
+
+// Init
+(async () => {{
+  db = await openDB();
+  document.getElementById('btnLoad').addEventListener('click', loadMetrics);
+  document.getElementById('btnClearCache').addEventListener('click', clearCache);
+  document.getElementById('btnExportCSV').addEventListener('click', exportCSV);
+
+  const btnReload = document.getElementById('btnReload');
+  if (btnReload) {{
+    btnReload.addEventListener('click', async function() {{
+      const btn = this;
+      if (btn.disabled) return;
+      if (!confirm('Load metrics from action logs now? This will ingest any _action log entries and may change metrics DBs.')) return;
+      btn.disabled = true;
+      const prevText = btn.textContent;
+      btn.textContent = 'Reloading...';
+      try {{
+        const res = await fetch('/api/metrics/reload', {{ method: 'POST', credentials: 'same-origin' }});
+        const result = await res.json();
+        if (!res.ok) {{
+          alert(result.error || 'Reload failed');
+          // If rate limited, try to extract seconds
+          const m = (result.error || '').match(/(\d+) seconds?/);
+          if (m) {{
+            let wait = parseInt(m[1], 10);
+            btn.textContent = `Manual Load Data (${{wait}}s)`;
+            const iv = setInterval(() => {{
+              wait -= 1;
+              if (wait <= 0) {{ clearInterval(iv); btn.textContent = prevText; btn.disabled = false; }}
+              else {{ btn.textContent = `Manual Load Data (${{wait}}s)`; }}
+            }}, 1000);
+          }} else {{
+            btn.textContent = prevText;
+            btn.disabled = false;
+          }}
+          return;
+        }}
+        alert(result.message || 'Reload completed');
+        // Refresh metrics from server
+        await loadMetrics();
+        // Disable for default rate limit period (approximate)
+        const RATE_MS = 1000 * 300; // 5 minutes
+        btn.textContent = prevText;
+        btn.disabled = true;
+        setTimeout(() => {{ btn.disabled = false; btn.textContent = prevText; }}, RATE_MS);
+      }} catch (e) {{
+        alert('Error reloading metrics: ' + e.message);
+        btn.textContent = prevText;
+        btn.disabled = false;
+      }}
+    }});
+  }}
+
+  await loadMetrics();
+}})();
+  </script>
+</body>
+</html>"""
+
+    handler.send_response(200)
+    handler.send_header("Content-type", "text/html; charset=utf-8")
+    handler.end_headers()
+    handler.wfile.write(html.encode("utf-8"))
+
+
+def handle_metrics_reload_post(handler) -> bool:
+    """POST /api/metrics/reload - reload metrics by consuming all action logs (rate limited)."""
+    allowed, error_msg = check_rate_limit_metrics_reload()
+    if not allowed:
+        _write_json(handler, {"error": error_msg}, status_code=429)
+        return True
+
+    try:
+        from ..metrics_storage import reload_action_logs
+
+        res = reload_action_logs()
+        get_logger().info(f"Metrics reload completed: {res}")
+        _write_json(handler, {"success": True, "message": f"Reloaded {res.get('inserted',0)} events from {res.get('files_processed',0)} files."})
+        return True
+    except Exception as e:
+        get_logger().error(f"Failed to reload metrics: {e}")
+        _write_json(handler, {"error": f"Failed to reload metrics: {str(e)}"}, status_code=500)
+        return True

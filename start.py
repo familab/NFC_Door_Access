@@ -16,7 +16,7 @@ import os
 # Try to import Raspberry Pi GPIO, fall back to emulator/stub for development on Windows
 try:
     import RPi.GPIO as GPIO
-except ModuleNotFoundError:
+except Exception:
     try:
         # Some emulator packages may expose an alternative module name
         import RPi.GPIO_emulator as GPIO  # type: ignore

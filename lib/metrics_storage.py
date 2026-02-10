@@ -71,25 +71,45 @@ def _parse_action_message(message: str) -> Optional[Dict[str, str]]:
     event_type = None
     status = "Unknown"
 
+    raw_event = None
     if _BADGE_PART in message and _STATUS_PART in message:
         left, right = message.split(_BADGE_PART, 1)
         badge_part, status_part = right.rsplit(_STATUS_PART, 1)
-        event_type = left.strip()
+        raw_event = left.strip()
         badge_id = badge_part.strip() or None
         status = status_part.strip() or "Unknown"
     elif _STATUS_PART in message:
         left, status_part = message.rsplit(_STATUS_PART, 1)
-        event_type = left.strip()
+        raw_event = left.strip()
         status = status_part.strip() or "Unknown"
-
-    if not event_type:
+    else:
+        # Message didn't match expected patterns
         return None
 
-    return {
-        "event_type": event_type,
-        "badge_id": badge_id,
-        "status": status,
-    }
+    if not raw_event:
+        return None
+
+    # Normalize event type to simplified lowercase tokens
+    et = raw_event.lower()
+    # remove parenthetical notes like "(1 hour)"
+    et = re.sub(r"\(.*\)", "", et).strip()
+
+    if "manual lock" in et:
+        event_type = "manual_lock"
+    elif "manual unlock" in et:
+        event_type = "manual_unlock"
+    elif "scan" in et or "badge" in et:
+        event_type = "scan"
+    elif "open" in et or "unlocked" in et:
+        event_type = "open"
+    elif "close" in et or "closed" in et or "locked" in et:
+        event_type = "close"
+    else:
+        # fallback: convert to snake_case-like token
+        key = re.sub(r"\W+", "_", et).strip("_")
+        event_type = key or et
+
+    return {"event_type": event_type, "badge_id": badge_id, "status": status}
 
 
 def parse_action_log_line(line: str) -> Optional[Dict[str, str]]:
@@ -292,3 +312,110 @@ def month_events_to_csv(events: Sequence[Dict[str, Optional[str]]]) -> str:
             ]
         )
     return output.getvalue()
+
+
+def reload_action_logs(log_dir: Optional[str] = None, base_path: Optional[str] = None) -> dict:
+    """Scan action log files, bulk-insert parsed events into monthly DBs, and remove consumed lines.
+
+    Returns a dict with keys: inserted, files_processed, files_scanned.
+    """
+    import tempfile
+    import shutil
+
+    log_dir = log_dir or os.path.dirname(config.get("LOG_FILE", "")) or "logs"
+    base_path = base_path or get_metrics_base_path()
+
+    files_scanned = 0
+    files_processed = 0
+    total_inserted = 0
+
+    if not os.path.isdir(log_dir):
+        return {"inserted": 0, "files_processed": 0, "files_scanned": 0}
+
+    for name in os.listdir(log_dir):
+        # Look for dated action logs like base_action-YYYY-MM-DD.txt
+        if not name.endswith(".txt"):
+            continue
+        if "_action-" not in name and not name.endswith("_action.txt"):
+            continue
+        path = os.path.join(log_dir, name)
+        files_scanned += 1
+        try:
+            kept_lines = []
+            events_to_insert = []
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    parsed = parse_action_log_line(line)
+                    if parsed is None:
+                        kept_lines.append(line)
+                        continue
+                    events_to_insert.append(parsed)
+
+            if not events_to_insert:
+                continue
+
+            # Group events by month_key for bulk insert
+            grouped = {}
+            for ev in events_to_insert:
+                try:
+                    ts = datetime.strptime(ev["ts"], "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    # skip malformed
+                    continue
+                month_key = _month_key_for_datetime(ts)
+                grouped.setdefault(month_key, []).append(ev)
+
+            # Bulk insert per month with transaction and pragmas
+            inserted = 0
+            for month_key, rows in grouped.items():
+                db_path = ensure_month_db(month_key, base_path=base_path)
+                conn = sqlite3.connect(db_path)
+                try:
+                    conn.execute("PRAGMA journal_mode=WAL;")
+                    conn.execute("PRAGMA synchronous=OFF;")
+                    cur = conn.cursor()
+                    cur.execute("BEGIN")
+                    cur.executemany(
+                        "INSERT INTO events (ts, event_type, badge_id, status, raw_message) VALUES (?, ?, ?, ?, ?)",
+                        [
+                            (
+                                r["ts"],
+                                r.get("event_type"),
+                                r.get("badge_id"),
+                                r.get("status"),
+                                r.get("raw_message"),
+                            )
+                            for r in rows
+                        ],
+                    )
+                    conn.commit()
+                    inserted += len(rows)
+                except Exception:
+                    conn.rollback()
+                    raise
+                finally:
+                    conn.close()
+
+            total_inserted += inserted
+            files_processed += 1
+
+            # Write back non-action lines atomically
+            fd, tmp = tempfile.mkstemp(dir=log_dir)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as outfh:
+                    outfh.writelines(kept_lines)
+                shutil.move(tmp, path)
+            except Exception:
+                try:
+                    os.remove(tmp)
+                except Exception:
+                    pass
+
+        except Exception as e:
+            # Log and continue
+            try:
+                get_logger().error(f"Failed to process action log {path}: {e}")
+            except Exception:
+                pass
+
+    return {"inserted": total_inserted, "files_processed": files_processed, "files_scanned": files_scanned}

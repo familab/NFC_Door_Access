@@ -19,10 +19,9 @@ class TestOpenAPISpec(unittest.TestCase):
         spec = get_openapi_spec()
         paths = spec.get("paths", {})
         self.assertIn("/api/toggle", paths)
-        self.assertIn("/metrics", paths)
-        self.assertIn("/api/metrics/badge-scans-per-hour", paths)
-        self.assertIn("/api/metrics/full-event-timeline", paths)
-        self.assertIn("/api/metrics/export", paths)
+        # Unified metrics endpoint and reload
+        self.assertIn("/api/metrics", paths)
+        self.assertIn("/api/metrics/reload", paths)
 
 if __name__ == '__main__':
     unittest.main()

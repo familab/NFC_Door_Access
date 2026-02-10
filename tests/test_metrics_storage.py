@@ -88,6 +88,23 @@ class TestMetricsStorage(unittest.TestCase):
                 events = query_events_range("2026-01-01 00:00:00", "2026-12-31 23:59:59")
                 self.assertEqual(len(events), 2)
 
+    def test_parse_action_message_normalization(self):
+        from lib.metrics_storage import parse_action_log_line
+        cases = [
+            ("2026-02-09 12:00:00 - foo - INFO - Badge Scan - Badge: 12345 - Status: OK", "scan", "12345", "OK"),
+            ("2026-02-09 12:01:00 - foo - INFO - Door CLOSED - Status: LOCKED", "close", None, "LOCKED"),
+            ("2026-02-09 12:02:00 - foo - INFO - Door OPEN - Status: UNLOCKED", "open", None, "UNLOCKED"),
+            ("2026-02-09 12:03:00 - foo - INFO - Manual Lock - Status: OK", "manual_lock", None, "OK"),
+            ("2026-02-09 12:04:00 - foo - INFO - Manual Unlock (1 hour) - Status: OK", "manual_unlock", None, "OK"),
+            ("2026-02-09 12:05:00 - foo - INFO - Some Other Event - Status: YEP", "some_other_event", None, "YEP"),
+        ]
+        for line, expect_type, expect_badge, expect_status in cases:
+            parsed = parse_action_log_line(line)
+            self.assertIsNotNone(parsed)
+            self.assertEqual(parsed["event_type"], expect_type)
+            self.assertEqual(parsed.get("badge_id"), expect_badge)
+            self.assertEqual(parsed.get("status"), expect_status)
+
 
 if __name__ == "__main__":
     unittest.main()

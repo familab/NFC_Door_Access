@@ -77,50 +77,39 @@ def get_openapi_spec(host: Optional[str] = None) -> Dict:
                     "security": [{"basicAuth": []}]
                 }
             },
-            "/metrics": {
+            "/api/metrics": {
                 "get": {
-                    "summary": "Metrics dashboard page",
-                    "description": "HTML page with chart rendering, pagination and date-range filters.",
+                    "summary": "Unified metrics data endpoint",
+                    "description": (
+                        "Returns structured metrics events for the requested date range. "
+                        "Defaults: start=Jan 1 of current year, end=today. "
+                        "Maximum range: 365 days (returns 400 if exceeded). "
+                        "Note: the payload excludes raw log messages (no raw_message field)."
+                    ),
                     "parameters": [
-                        {"name": "start_date", "in": "query", "schema": {"type": "string", "format": "date"}},
-                        {"name": "end_date", "in": "query", "schema": {"type": "string", "format": "date"}},
-                        {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1}},
-                        {"name": "per_page", "in": "query", "schema": {"type": "integer", "minimum": 1}}
-                    ],
-                    "responses": {"200": {"description": "HTML metrics page"}},
-                    "security": [{"basicAuth": []}]
-                }
-            },
-            "/api/metrics/badge-scans-per-hour": {"get": {"summary": "Badge Scans Per Hour", "responses": {"200": {"description": GRAPH_DATA_DESCRIPTION}}, "security": [{"basicAuth": []}]}},
-            "/api/metrics/door-open-duration": {"get": {"summary": "Door Open Duration Over Time", "responses": {"200": {"description": GRAPH_DATA_DESCRIPTION}}, "security": [{"basicAuth": []}]}},
-            "/api/metrics/top-badge-users": {"get": {"summary": "Top Badge Users", "responses": {"200": {"description": GRAPH_DATA_DESCRIPTION}}, "security": [{"basicAuth": []}]}},
-            "/api/metrics/door-cycles-per-day": {"get": {"summary": "Door Cycles Per Day", "responses": {"200": {"description": GRAPH_DATA_DESCRIPTION}}, "security": [{"basicAuth": []}]}},
-            "/api/metrics/denied-badge-scans": {"get": {"summary": "Denied Badge Scans", "responses": {"200": {"description": GRAPH_DATA_DESCRIPTION}}, "security": [{"basicAuth": []}]}},
-            "/api/metrics/badge-scan-door-open-latency": {"get": {"summary": "Badge Scan to Door Open Latency", "responses": {"200": {"description": GRAPH_DATA_DESCRIPTION}}, "security": [{"basicAuth": []}]}},
-            "/api/metrics/manual-events": {"get": {"summary": "Manual Unlock/Lock Events", "responses": {"200": {"description": GRAPH_DATA_DESCRIPTION}}, "security": [{"basicAuth": []}]}},
-            "/api/metrics/door-left-open-too-long": {"get": {"summary": "Door Left Open Too Long", "responses": {"200": {"description": GRAPH_DATA_DESCRIPTION}}, "security": [{"basicAuth": []}]}},
-            "/api/metrics/hourly-activity-heatmap": {"get": {"summary": "Hourly Activity Heatmap", "responses": {"200": {"description": GRAPH_DATA_DESCRIPTION}}, "security": [{"basicAuth": []}]}},
-            "/api/metrics/full-event-timeline": {
-                "get": {
-                    "summary": "Full Event Timeline",
-                    "parameters": [
-                        {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1}},
-                        {"name": "page_size", "in": "query", "schema": {"type": "integer", "minimum": 1}}
-                    ],
-                    "responses": {"200": {"description": "Paginated timeline data"}},
-                    "security": [{"basicAuth": []}]
-                }
-            },
-            "/api/metrics/export": {
-                "get": {
-                    "summary": "Export month data",
-                    "parameters": [
-                        {"name": "month", "in": "query", "required": True, "schema": {"type": "string", "example": "2026-02"}},
-                        {"name": "format", "in": "query", "required": True, "schema": {"type": "string", "enum": ["csv", "json"]}}
+                        {"name": "start", "in": "query", "schema": {"type": "string", "format": "date"}, "description": "Start date (inclusive)"},
+                        {"name": "end", "in": "query", "schema": {"type": "string", "format": "date"}, "description": "End date (inclusive)"},
+                        {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1}, "description": "Page number"},
+                        {"name": "page_size", "in": "query", "schema": {"type": "integer", "minimum": 1}, "description": "Events per page"},
+                        {"name": "format", "in": "query", "schema": {"type": "string", "enum": ["json", "csv"]}, "description": "Optional: return CSV (csv) or JSON (json, default)"}
                     ],
                     "responses": {
-                        "200": {"description": "Monthly export file"},
-                        "400": {"description": "Invalid query parameters"}
+                        "200": {"description": "Structured metrics (JSON) or CSV attachment"},
+                        "400": {"description": "Bad request (e.g., date range > 365 days)"},
+                        "401": {"description": "Unauthorized"},
+                        "500": {"description": "Internal server error"}
+                    },
+                    "security": [{"basicAuth": []}]
+                }
+            },
+            "/api/metrics/reload": {
+                "post": {
+                    "summary": "Trigger metrics reload/ingestion",
+                    "description": "Trigger a manual metrics reload/ingestion. Rate-limited (5 minutes). Requires Basic Auth.",
+                    "responses": {
+                        "200": {"description": "Reload accepted"},
+                        "429": {"description": "Rate limited"},
+                        "401": {"description": "Unauthorized"}
                     },
                     "security": [{"basicAuth": []}]
                 }

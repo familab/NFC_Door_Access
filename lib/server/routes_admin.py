@@ -29,6 +29,7 @@ from .state import (
     get_badge_refresh_callback,
     get_door_toggle_callback,
     check_rate_limit_badge_refresh,
+    check_rate_limit_door_toggle,
     read_log_tail,
     read_log_full,
 )
@@ -321,6 +322,17 @@ def handle_post_refresh_badges(handler) -> bool:
 
 def handle_post_toggle(handler) -> bool:
     """Handle POST /api/toggle using the callback registered by start.py."""
+    # Check rate limit first
+    allowed, error_msg = check_rate_limit_door_toggle()
+    if not allowed:
+        handler.send_response(429)
+        handler.send_header("Content-type", APPLICATION_JSON)
+        handler.end_headers()
+        handler.wfile.write(
+            json.dumps({"success": False, "message": error_msg}).encode("utf-8")
+        )
+        return True
+
     toggle_fn = get_door_toggle_callback()
     if toggle_fn is None:
         handler.send_response(503)

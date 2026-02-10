@@ -18,7 +18,7 @@ from . import routes_metrics
 
 
 # Paths that do not require authentication
-PUBLIC_PATHS = {"/", "/health", "/docs"}
+PUBLIC_PATHS = {"/", "/health"}
 NOT_FOUND = "Not Found"
 
 
@@ -106,7 +106,13 @@ class RequestHandler(BaseHTTPRequestHandler):
         path = parsed.path
         raw_query = parsed.query
 
-        if path in ("/", "/health"):
+        if path == "/":
+            self.send_response(302)
+            self.send_header("Location", "/health")
+            self.end_headers()
+            return
+
+        if path == "/health":
             routes_public.send_health_page(self)
             return
 
@@ -129,8 +135,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             routes_metrics.send_metrics_page(self, raw_query)
             return
 
-        if path.startswith("/api/metrics/"):
-            if routes_metrics.handle_metrics_api_get(self, path, raw_query):
+        if path == "/api/metrics":
+            if routes_metrics.handle_unified_metrics_api(self, raw_query):
                 return
 
         if path.startswith("/admin/download/"):
@@ -162,6 +168,12 @@ class RequestHandler(BaseHTTPRequestHandler):
             if not self._require_auth():
                 return
             if routes_admin.handle_post_toggle(self):
+                return
+
+        if path == "/api/metrics/reload":
+            if not self._require_auth():
+                return
+            if routes_metrics.handle_metrics_reload_post(self):
                 return
 
         self.send_error(404, NOT_FOUND)
