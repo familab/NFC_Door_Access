@@ -28,6 +28,7 @@ except Exception:
 import time
 import threading
 import csv
+from typing import Optional
 try:
     import board
     import busio
@@ -185,7 +186,7 @@ last_lock_time = 0
 debounce_time = config["DEBOUNCE_TIME"]
 
 
-def unlock_door(badge_id: str | None = None):
+def unlock_door(badge_id: Optional[str] = None):
     """Unlock door for 1 hour using door controller.
 
     Args:
@@ -199,7 +200,7 @@ def unlock_door(badge_id: str | None = None):
         pass
 
 
-def lock_door(badge_id: str | None = None):
+def lock_door(badge_id: Optional[str] = None):
     """Lock door using door controller.
 
     Args:
@@ -213,7 +214,7 @@ def lock_door(badge_id: str | None = None):
         pass
 
 
-def _toggle_door_state(badge_id: str | None = None):
+def _toggle_door_state(badge_id: Optional[str] = None):
     """Reuse existing manual lock/unlock actions and return the new lock state.
 
     Accepts optional badge_id which is forwarded to underlying actions for auditing.

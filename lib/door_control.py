@@ -1,7 +1,7 @@
 """Door control module with thread-safe status tracking."""
 import threading
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 
 from .config import config
 from .logging_utils import get_logger, record_action
@@ -12,7 +12,7 @@ _door_is_open = False
 _door_status_updated = datetime.now()
 
 
-def set_door_status(is_open: bool, badge_id: int | str = -1):
+def set_door_status(is_open: bool, badge_id: Union[int, str] = -1):
     """
     Set the door status in a thread-safe manner.
 
@@ -79,7 +79,7 @@ class DoorController:
         self.unlock_timer = None
         self.logger = get_logger()
 
-    def unlock_door(self, duration: Optional[int] = None, badge_id: int | str = -1):
+    def unlock_door(self, duration: Optional[int] = None, badge_id: Union[int, str] = -1):
         """
         Unlock the door for a specified duration.
 
@@ -112,7 +112,7 @@ class DoorController:
             # temporary unlocks use a separate timer with relock logic in unlock_temporarily
             self.unlock_timer = threading.Timer(duration, self.lock_door)
             self.unlock_timer.start()
-    def lock_door(self, badge_id: int | str = -1):
+    def lock_door(self, badge_id: Union[int, str] = -1):
         """Lock the door."""
         with self.gpio_lock:
             if self.unlock_timer is not None:
@@ -124,7 +124,7 @@ class DoorController:
                 set_door_status(False, badge_id)
                 self.logger.info("Door locked")
 
-    def unlock_temporarily(self, duration: int, badge_id: int | str = -1):
+    def unlock_temporarily(self, duration: int, badge_id: Union[int, str] = -1):
         """
         Unlock the door temporarily (e.g., for badge scan).
 
