@@ -38,7 +38,51 @@ def test_reload_consumes_action_logs_and_inserts(tmp_path):
     conn.close()
     assert cnt == 2
 
-    # Ensure file no longer contains action lines
+    # Ensure file still contains action lines (reload should not delete logs)
+    txt = log_file.read_text()
+    assert "Badge Scan" in txt
+    assert "Door OPEN/UNLOCKED" in txt
+
+
+def test_ingest_action_log_file_deletes_by_default(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    content = (
+        "2026-02-01 10:00:00 - door_action - INFO - Badge Scan - Badge: abc - Status: Granted\n"
+        "Some comment\n"
+    )
+    log_file = logs_dir / "door_controller_action-2026-02-01.txt"
+    log_file.write_text(content)
+
+    db_base = tmp_path / "metrics"
+    db_base.mkdir()
+
+    inserted = ingest_action_log_file(str(log_file), base_path=str(db_base))
+    assert inserted == 1
+
+    # file should have comments preserved but action line removed
     txt = log_file.read_text()
     assert "Badge Scan" not in txt
-    assert "Door OPEN/UNLOCKED" not in txt
+    assert "Some comment" in txt
+
+
+def test_ingest_action_log_file_preserves_when_delete_false(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    content = (
+        "2026-02-01 10:00:00 - door_action - INFO - Badge Scan - Badge: abc - Status: Granted\n"
+        "Another comment\n"
+    )
+    log_file = logs_dir / "door_controller_action-2026-02-01.txt"
+    log_file.write_text(content)
+
+    db_base = tmp_path / "metrics"
+    db_base.mkdir()
+
+    inserted = ingest_action_log_file(str(log_file), base_path=str(db_base), delete_file=False)
+    assert inserted == 1
+
+    # file should still contain the action line
+    txt = log_file.read_text()
+    assert "Badge Scan" in txt
+    assert "Another comment" in txt

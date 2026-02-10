@@ -91,12 +91,12 @@ class TestMetricsStorage(unittest.TestCase):
     def test_parse_action_message_normalization(self):
         from lib.metrics_storage import parse_action_log_line
         cases = [
-            ("2026-02-09 12:00:00 - foo - INFO - Badge Scan - Badge: 12345 - Status: OK", "scan", "12345", "OK"),
-            ("2026-02-09 12:01:00 - foo - INFO - Door CLOSED - Status: LOCKED", "close", None, "LOCKED"),
-            ("2026-02-09 12:02:00 - foo - INFO - Door OPEN - Status: UNLOCKED", "open", None, "UNLOCKED"),
-            ("2026-02-09 12:03:00 - foo - INFO - Manual Lock - Status: OK", "manual_lock", None, "OK"),
-            ("2026-02-09 12:04:00 - foo - INFO - Manual Unlock (1 hour) - Status: OK", "manual_unlock", None, "OK"),
-            ("2026-02-09 12:05:00 - foo - INFO - Some Other Event - Status: YEP", "some_other_event", None, "YEP"),
+            ("2026-02-09 12:00:00 - foo - INFO - Badge Scan - Badge: 12345 - Status: OK", "scan", "12345", "ok"),
+            ("2026-02-09 12:01:00 - foo - INFO - Door CLOSED - Status: LOCKED", "close", None, "locked"),
+            ("2026-02-09 12:02:00 - foo - INFO - Door OPEN - Status: UNLOCKED", "open", None, "unlocked"),
+            ("2026-02-09 12:03:00 - foo - INFO - Manual Lock - Status: OK", "manual_lock", None, "ok"),
+            ("2026-02-09 12:04:00 - foo - INFO - Manual Unlock (1 hour) - Status: OK", "manual_unlock", None, "ok"),
+            ("2026-02-09 12:05:00 - foo - INFO - Some Other Event - Status: YEP", "some_other_event", None, "yep"),
         ]
         for line, expect_type, expect_badge, expect_status in cases:
             parsed = parse_action_log_line(line)
@@ -104,6 +104,29 @@ class TestMetricsStorage(unittest.TestCase):
             self.assertEqual(parsed["event_type"], expect_type)
             self.assertEqual(parsed.get("badge_id"), expect_badge)
             self.assertEqual(parsed.get("status"), expect_status)
+
+    def test_normalize_status_helper(self):
+        from lib.metrics_storage import normalize_status
+        self.assertEqual(normalize_status("OK"), "ok")
+        self.assertEqual(normalize_status(" Locked "), "locked")
+        self.assertEqual(normalize_status(""), "unknown")
+        self.assertEqual(normalize_status(None), "unknown")
+
+    def test_normalize_event_type_helper(self):
+        from lib.metrics_storage import normalize_event_type
+        cases = [
+            ("Badge Scan", "scan"),
+            ("Badge: 12345", "scan"),
+            ("Door CLOSED/LOCKED", "close"),
+            ("Door OPEN/UNLOCKED", "open"),
+            ("Manual Lock", "manual_lock"),
+            ("Manual Unlock (1 hour)", "manual_unlock"),
+            ("Some Other Event", "some_other_event"),
+            ("", "unknown"),
+            (None, "unknown"),
+        ]
+        for raw, expect in cases:
+            self.assertEqual(normalize_event_type(raw), expect)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ from datetime import date, datetime
 from urllib.parse import parse_qs
 
 from ..metrics_storage import query_events_range, month_events_to_csv
-from .state import APPLICATION_JSON, check_rate_limit_metrics_reload
+from .state import APPLICATION_JSON, check_rate_limit_metrics_reload, get_seconds_until_next_metrics_reload
 from ..logging_utils import get_logger
 
 
@@ -135,9 +135,8 @@ def send_metrics_page(handler, raw_query: str):
     end_date = _parse_date(query.get("end", [default_end.isoformat()])[0], default_end)
 
     # Compute reload button state
-    metrics_reload_wait = 0
+    # Use the module-level helper (patchable in tests)
     try:
-        from .state import get_seconds_until_next_metrics_reload
         metrics_reload_wait = get_seconds_until_next_metrics_reload()
     except Exception:
         metrics_reload_wait = 0
@@ -162,6 +161,9 @@ def send_metrics_page(handler, raw_query: str):
     .toolbar {{ display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }}
     .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }}
     .card {{ background: #252526; border: 1px solid #555; border-radius: 8px; padding: 12px; }}
+    /* Ensure canvases have a fixed height so Chart.js responsive resizing doesn't expand vertically */
+    .card {{ min-height: 260px; }}
+    .card canvas {{ display: block; width: 100%; height: 260px !important; }}
     .controls {{ margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }}
     button {{ background:#4ec9b0; color:#1e1e1e; padding:6px 10px; border:none; border-radius:4px; cursor:pointer; }}
     button:disabled {{ opacity:0.5; cursor:not-allowed; }}
@@ -331,7 +333,8 @@ function renderDashboard(events) {{
 function renderBadgeScansPerHour(events) {{
   const data = new Array(24).fill(0);
   events.forEach(e => {{
-    if (e.event_type === 'Badge Scan') {{
+    const et = (e.event_type || '').toString().toLowerCase();
+    if (et === 'scan' || et === 'badge scan' || et.includes('scan')) {{
       const hour = new Date(e.ts).getHours();
       data[hour]++;
     }}
@@ -345,7 +348,8 @@ function renderBadgeScansPerHour(events) {{
 function renderTopBadgeUsers(events) {{
   const counts = {{}};
   events.forEach(e => {{
-    if (e.event_type === 'Badge Scan' && e.status?.toLowerCase() === 'granted') {{
+    const et = (e.event_type || '').toString().toLowerCase();
+    if ((et === 'scan' || et.includes('scan') || et === 'badge scan') && e.status?.toLowerCase() === 'granted') {{
       const badge = e.badge_id || 'unknown';
       counts[badge] = (counts[badge] || 0) + 1;
     }}
@@ -362,7 +366,8 @@ function renderTopBadgeUsers(events) {{
 function renderDoorCyclesPerDay(events) {{
   const counts = {{}};
   events.forEach(e => {{
-    if (e.event_type === 'Door OPEN/UNLOCKED') {{
+    const et = (e.event_type || '').toString().toLowerCase();
+    if (et === 'open' || et.includes('open') || et.includes('unlocked')) {{
       const day = e.ts.split(' ')[0];
       counts[day] = (counts[day] || 0) + 1;
     }}
@@ -378,7 +383,8 @@ function renderDoorCyclesPerDay(events) {{
 function renderDeniedScans(events) {{
   const counts = {{}};
   events.forEach(e => {{
-    if (e.event_type === 'Badge Scan' && e.status?.toLowerCase() === 'denied') {{
+    const et = (e.event_type || '').toString().toLowerCase();
+    if ((et === 'scan' || et.includes('scan') || et === 'badge scan') && e.status?.toLowerCase() === 'denied') {{
       const day = e.ts.split(' ')[0];
       counts[day] = (counts[day] || 0) + 1;
     }}
@@ -392,30 +398,47 @@ function renderDeniedScans(events) {{
 
 // Generic chart creator
 function createChart(id, title, type, labels, data) {{
-  let container = document.getElementById(id);
-  if (!container) {{
-    container = document.createElement('div');
-    container.className = 'card';
-    container.innerHTML = `<h2>${{title}}</h2><canvas id="chart-${{id}}"></canvas>`;
-    document.getElementById('chartsGrid').appendChild(container);
+  const cardId = `card-${{id}}`;
+  const canvasId = `chart-${{id}}`;
+
+  let card = document.getElementById(cardId);
+  if (!card) {{
+    card = document.createElement('div');
+    card.className = 'card';
+    card.id = cardId;
+    card.innerHTML = `<h2>${{title}}</h2><canvas id="${{canvasId}}"></canvas>`;
+    document.getElementById('chartsGrid').appendChild(card);
+  }} else {{
+    // Update title
+    const h2 = card.querySelector('h2');
+    if (h2) h2.textContent = title;
   }}
 
-  const canvas = document.getElementById(`chart-${{id}}`);
-  if (charts[id]) charts[id].destroy();
+  // Replace existing canvas to clear inline size attributes and avoid cumulative scaling
+  const oldCanvas = document.getElementById(canvasId);
+  if (oldCanvas) {{
+    try {{ if (charts[id]) {{ charts[id].destroy(); }} }} catch (e) {{ /* ignore */ }}
+    const newCanvas = document.createElement('canvas');
+    newCanvas.id = canvasId;
+    newCanvas.style.width = '100%';
+    newCanvas.style.height = '260px';
+    oldCanvas.parentNode.replaceChild(newCanvas, oldCanvas);
+  }} else {{
+    const c = document.getElementById(canvasId);
+    if (c) {{ c.style.width = '100%'; c.style.height = '260px'; }}
+  }}
+
+  const canvas = document.getElementById(canvasId);
+  try {{ if (charts[id]) {{ charts[id].destroy(); delete charts[id]; }} }} catch (e) {{ /* ignore */ }}
 
   charts[id] = new Chart(canvas, {{
     type,
-    data: {{
-      labels,
-      datasets: [{{
-        label: title,
-        data,
-        borderColor: '#4ec9b0',
-        backgroundColor: 'rgba(78,201,176,0.3)'
-      }}]
-    }},
+    data: {{ labels, datasets: [{{ label: title, data, borderColor: '#4ec9b0', backgroundColor: 'rgba(78,201,176,0.3)' }}] }},
     options: {{ responsive: true, maintainAspectRatio: false }}
   }});
+
+  // Enforce CSS height after Chart.js applies inline styles
+  try {{ canvas.style.height = '260px'; }} catch (e) {{ /* ignore */ }}
 }}
 
 // Timeline table

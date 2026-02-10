@@ -38,6 +38,50 @@ def get_metrics_base_path() -> str:
     return str(config.get("METRICS_DB_PATH", "logs/metrics"))
 
 
+def normalize_status(status: Optional[str]) -> str:
+    """Return a lowercase normalized status token, fallback to 'unknown'."""
+    if status is None:
+        return "unknown"
+    s = str(status).strip()
+    return s.lower() if s else "unknown"
+
+
+def normalize_event_type(raw_event: Optional[str]) -> str:
+    """Normalize a raw event description into a simplified token.
+
+    Examples:
+      - "Badge Scan" -> "scan"
+      - "Door OPEN/UNLOCKED" -> "open"
+      - "Manual Unlock (1 hour)" -> "manual_unlock"
+      - "Some Other Event" -> "some_other_event"
+    """
+    if raw_event is None:
+        return "unknown"
+    et = str(raw_event).lower()
+    # remove parenthetical notes like "(1 hour)"
+    et = re.sub(r"\(.*\)", "", et).strip()
+    # normalize whitespace
+    et = re.sub(r"\s+", " ", et)
+
+    if not et:
+        return "unknown"
+
+    if "manual lock" in et:
+        return "manual_lock"
+    if "manual unlock" in et:
+        return "manual_unlock"
+    if "scan" in et or "badge" in et:
+        return "scan"
+    if "open" in et or "unlocked" in et:
+        return "open"
+    if "close" in et or "closed" in et or "locked" in et:
+        return "close"
+
+    # fallback: convert to snake_case-like token
+    key = re.sub(r"\W+", "_", et).strip("_")
+    return key or et
+
+
 def _month_key_for_datetime(ts: datetime) -> str:
     return ts.strftime("%Y-%m")
 
@@ -77,11 +121,11 @@ def _parse_action_message(message: str) -> Optional[Dict[str, str]]:
         badge_part, status_part = right.rsplit(_STATUS_PART, 1)
         raw_event = left.strip()
         badge_id = badge_part.strip() or None
-        status = status_part.strip() or "Unknown"
+        status = normalize_status(status_part)
     elif _STATUS_PART in message:
         left, status_part = message.rsplit(_STATUS_PART, 1)
         raw_event = left.strip()
-        status = status_part.strip() or "Unknown"
+        status = normalize_status(status_part)
     else:
         # Message didn't match expected patterns
         return None
@@ -89,25 +133,8 @@ def _parse_action_message(message: str) -> Optional[Dict[str, str]]:
     if not raw_event:
         return None
 
-    # Normalize event type to simplified lowercase tokens
-    et = raw_event.lower()
-    # remove parenthetical notes like "(1 hour)"
-    et = re.sub(r"\(.*\)", "", et).strip()
-
-    if "manual lock" in et:
-        event_type = "manual_lock"
-    elif "manual unlock" in et:
-        event_type = "manual_unlock"
-    elif "scan" in et or "badge" in et:
-        event_type = "scan"
-    elif "open" in et or "unlocked" in et:
-        event_type = "open"
-    elif "close" in et or "closed" in et or "locked" in et:
-        event_type = "close"
-    else:
-        # fallback: convert to snake_case-like token
-        key = re.sub(r"\W+", "_", et).strip("_")
-        event_type = key or et
+    # Normalize event type using helper
+    event_type = normalize_event_type(raw_event)
 
     return {"event_type": event_type, "badge_id": badge_id, "status": status}
 
@@ -131,9 +158,14 @@ def parse_action_log_line(line: str) -> Optional[Dict[str, str]]:
     return parsed
 
 
-def ingest_action_log_file(path: str, base_path: Optional[str] = None) -> int:
+def ingest_action_log_file(path: str, base_path: Optional[str] = None, delete_file: bool = True) -> int:
     """
-    Parse a dated action log file and persist events into monthly sqlite dbs.
+    Parse a dated action log file and persist events into monthly sqlite dbs using bulk inserts.
+
+    Args:
+        path: Path to the action log file.
+        base_path: Base path for metrics db files.
+        delete_file: If True, remove parsed action lines from the log file (defaults to True).
 
     Returns:
         Number of inserted records.
@@ -141,40 +173,78 @@ def ingest_action_log_file(path: str, base_path: Optional[str] = None) -> int:
     if not os.path.exists(path):
         return 0
 
+    events_to_insert = []
+    kept_lines = []
+
+    # Read and parse lines
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            parsed = parse_action_log_line(line)
+            if parsed is None:
+                kept_lines.append(line)
+                continue
+            events_to_insert.append(parsed)
+
+    if not events_to_insert:
+        # Nothing to insert; if delete_file True and file only had non-action lines, leave it alone
+        return 0
+
+    # Group events by month_key for bulk insert
+    grouped: Dict[str, List[Dict[str, str]]] = {}
+    for ev in events_to_insert:
+        try:
+            ts = datetime.strptime(ev["ts"], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            # skip malformed
+            continue
+        month_key = _month_key_for_datetime(ts)
+        grouped.setdefault(month_key, []).append(ev)
+
     inserted = 0
-    conns: Dict[str, sqlite3.Connection] = {}
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                parsed = parse_action_log_line(line)
-                if parsed is None:
-                    continue
-                ts = datetime.strptime(parsed["ts"], "%Y-%m-%d %H:%M:%S")
-                month_key = _month_key_for_datetime(ts)
-                db_path = ensure_month_db(month_key, base_path=base_path)
-                conn = conns.get(db_path)
-                if conn is None:
-                    conn = sqlite3.connect(db_path)
-                    conns[db_path] = conn
-                conn.execute(
-                    """
-                    INSERT INTO events (ts, event_type, badge_id, status, raw_message)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
+    for month_key, rows in grouped.items():
+        db_path = ensure_month_db(month_key, base_path=base_path)
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=OFF;")
+            cur = conn.cursor()
+            cur.execute("BEGIN")
+            cur.executemany(
+                "INSERT INTO events (ts, event_type, badge_id, status, raw_message) VALUES (?, ?, ?, ?, ?)",
+                [
                     (
-                        parsed["ts"],
-                        parsed["event_type"],
-                        parsed.get("badge_id"),
-                        parsed["status"],
-                        parsed["raw_message"],
-                    ),
-                )
-                inserted += 1
-        for conn in conns.values():
+                        r["ts"],
+                        r.get("event_type"),
+                        r.get("badge_id"),
+                        r.get("status"),
+                        r.get("raw_message"),
+                    )
+                    for r in rows
+                ],
+            )
             conn.commit()
-    finally:
-        for conn in conns.values():
+            inserted += len(rows)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
             conn.close()
+
+    # If requested, write back kept_lines (non-action lines) atomically; otherwise leave file as-is
+    if delete_file:
+        import tempfile
+        import shutil
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or '.')
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as outfh:
+                outfh.writelines(kept_lines)
+            shutil.move(tmp, path)
+        except Exception:
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
     return inserted
 
 
@@ -315,13 +385,12 @@ def month_events_to_csv(events: Sequence[Dict[str, Optional[str]]]) -> str:
 
 
 def reload_action_logs(log_dir: Optional[str] = None, base_path: Optional[str] = None) -> dict:
-    """Scan action log files, bulk-insert parsed events into monthly DBs, and remove consumed lines.
+    """Scan action log files and bulk-insert parsed events into monthly DBs WITHOUT deleting or modifying log files.
+
+    Uses `ingest_action_log_file(..., delete_file=False)` so logs are left intact.
 
     Returns a dict with keys: inserted, files_processed, files_scanned.
     """
-    import tempfile
-    import shutil
-
     log_dir = log_dir or os.path.dirname(config.get("LOG_FILE", "")) or "logs"
     base_path = base_path or get_metrics_base_path()
 
@@ -332,87 +401,26 @@ def reload_action_logs(log_dir: Optional[str] = None, base_path: Optional[str] =
     if not os.path.isdir(log_dir):
         return {"inserted": 0, "files_processed": 0, "files_scanned": 0}
 
+    # Determine log extension from configured LOG_FILE (default to .txt)
+    cfg_log = config.get("LOG_FILE", "") or ""
+    _, ext = os.path.splitext(cfg_log)
+    if not ext:
+        ext = ".txt"
+
     for name in os.listdir(log_dir):
-        # Look for dated action logs like base_action-YYYY-MM-DD.txt
-        if not name.endswith(".txt"):
+        # match files like *_action-YYYY-MM-DD.<ext> or *_action<ext>
+        if not name.endswith(ext):
             continue
-        if "_action-" not in name and not name.endswith("_action.txt"):
+        if "_action-" not in name and not name.endswith(f"_action{ext}"):
             continue
         path = os.path.join(log_dir, name)
         files_scanned += 1
         try:
-            kept_lines = []
-            events_to_insert = []
-            with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    parsed = parse_action_log_line(line)
-                    if parsed is None:
-                        kept_lines.append(line)
-                        continue
-                    events_to_insert.append(parsed)
-
-            if not events_to_insert:
-                continue
-
-            # Group events by month_key for bulk insert
-            grouped = {}
-            for ev in events_to_insert:
-                try:
-                    ts = datetime.strptime(ev["ts"], "%Y-%m-%d %H:%M:%S")
-                except Exception:
-                    # skip malformed
-                    continue
-                month_key = _month_key_for_datetime(ts)
-                grouped.setdefault(month_key, []).append(ev)
-
-            # Bulk insert per month with transaction and pragmas
-            inserted = 0
-            for month_key, rows in grouped.items():
-                db_path = ensure_month_db(month_key, base_path=base_path)
-                conn = sqlite3.connect(db_path)
-                try:
-                    conn.execute("PRAGMA journal_mode=WAL;")
-                    conn.execute("PRAGMA synchronous=OFF;")
-                    cur = conn.cursor()
-                    cur.execute("BEGIN")
-                    cur.executemany(
-                        "INSERT INTO events (ts, event_type, badge_id, status, raw_message) VALUES (?, ?, ?, ?, ?)",
-                        [
-                            (
-                                r["ts"],
-                                r.get("event_type"),
-                                r.get("badge_id"),
-                                r.get("status"),
-                                r.get("raw_message"),
-                            )
-                            for r in rows
-                        ],
-                    )
-                    conn.commit()
-                    inserted += len(rows)
-                except Exception:
-                    conn.rollback()
-                    raise
-                finally:
-                    conn.close()
-
-            total_inserted += inserted
-            files_processed += 1
-
-            # Write back non-action lines atomically
-            fd, tmp = tempfile.mkstemp(dir=log_dir)
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as outfh:
-                    outfh.writelines(kept_lines)
-                shutil.move(tmp, path)
-            except Exception:
-                try:
-                    os.remove(tmp)
-                except Exception:
-                    pass
-
+            inserted = ingest_action_log_file(path, base_path=base_path, delete_file=False)
+            if inserted:
+                total_inserted += inserted
+                files_processed += 1
         except Exception as e:
-            # Log and continue
             try:
                 get_logger().error(f"Failed to process action log {path}: {e}")
             except Exception:
