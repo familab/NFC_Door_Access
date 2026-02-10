@@ -8,6 +8,7 @@ import os
 import re
 
 from .config import config
+from .metrics_storage import ingest_action_log_file
 
 # Global logger instance
 logger = None
@@ -417,7 +418,11 @@ def cleanup_old_logs(retention_days: Optional[int] = None):
                 continue
             if file_date < cutoff:
                 try:
-                    os.remove(os.path.join(log_dir, name))
+                    full_path = os.path.join(log_dir, name)
+                    # Persist action log history into monthly sqlite metrics before deletion.
+                    if suffix == "_action":
+                        ingest_action_log_file(full_path)
+                    os.remove(full_path)
                 except Exception:
                     pass
             break

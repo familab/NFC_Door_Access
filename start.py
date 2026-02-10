@@ -16,7 +16,7 @@ import os
 # Try to import Raspberry Pi GPIO, fall back to emulator/stub for development on Windows
 try:
     import RPi.GPIO as GPIO
-except ModuleNotFoundError:
+except Exception:
     try:
         # Some emulator packages may expose an alternative module name
         import RPi.GPIO_emulator as GPIO  # type: ignore
@@ -47,7 +47,14 @@ from lib.logging_utils import (
 )
 from lib.data import GoogleSheetsData
 from lib.door_control import DoorController, set_door_status, get_door_status
-from lib.server import start_health_server, stop_health_server, update_pn532_success, update_pn532_error, set_badge_refresh_callback
+from lib.server import (
+    start_health_server,
+    stop_health_server,
+    update_pn532_success,
+    update_pn532_error,
+    set_badge_refresh_callback,
+    set_door_toggle_callback,
+)
 from lib.watchdog import start_watchdog, stop_watchdog
 
 # GPIO Pin Definitions (from config)
@@ -83,9 +90,6 @@ logger.info("=" * 60)
 data_client = GoogleSheetsData()
 data_client.connect()
 
-
-# Register badge refresh callback so it can be invoked from the admin page
-from lib.server import set_badge_refresh_callback
 
 def _refresh_badge_list():
     """Refresh badge list from Google Sheets and update local CSV backup.
@@ -181,18 +185,47 @@ last_lock_time = 0
 debounce_time = config["DEBOUNCE_TIME"]
 
 
-def unlock_door():
-    """Unlock door for 1 hour using door controller."""
-    door_controller.unlock_door(UNLOCK_DURATION)
-    record_action("Manual Unlock (1 hour)")
-    data_client.log_access("Manual Unlock (1 hour)", "Success")
+def unlock_door(badge_id: str | None = None):
+    """Unlock door for 1 hour using door controller.
+
+    Args:
+        badge_id: Optional badge identifier to attribute this manual action to.
+    """
+    record_action("Manual Unlock (1 hour)", badge_id=badge_id)
+    door_controller.unlock_door(UNLOCK_DURATION, badge_id=badge_id)
+    try:
+        data_client.log_access("Manual Unlock (1 hour)", "Success")
+    except Exception:
+        pass
 
 
-def lock_door():
-    """Lock door using door controller."""
-    door_controller.lock_door()
-    record_action("Manual Lock")
-    data_client.log_access("Manual Lock", "Success")
+def lock_door(badge_id: str | None = None):
+    """Lock door using door controller.
+
+    Args:
+        badge_id: Optional badge identifier to attribute this manual action to.
+    """
+    record_action("Manual Lock", badge_id=badge_id)
+    door_controller.lock_door(badge_id=badge_id)
+    try:
+        data_client.log_access("Manual Lock", "Success")
+    except Exception:
+        pass
+
+
+def _toggle_door_state(badge_id: str | None = None):
+    """Reuse existing manual lock/unlock actions and return the new lock state.
+
+    Accepts optional badge_id which is forwarded to underlying actions for auditing.
+    """
+    if get_door_status():
+        lock_door(badge_id=badge_id)
+        return "locked"
+    unlock_door(badge_id=badge_id)
+    return "unlocked"
+
+
+set_door_toggle_callback(_toggle_door_state)
 
 
 # Fallback to CSV if Google Sheets is unavailable
@@ -303,7 +336,8 @@ def check_rfid(stop_event: threading.Event):
 
                     # Unlock door temporarily if not already unlocked
                     if not get_door_status():
-                        door_controller.unlock_temporarily(config["DOOR_UNLOCK_BADGE_DURATION"])
+                        # Pass badge UID through so actions are attributed to this badge
+                        door_controller.unlock_temporarily(config["DOOR_UNLOCK_BADGE_DURATION"], badge_id=uid_hex)
 
                     # Log to Google Sheets (best effort)
                     data_client.log_access(uid_hex, "Granted")

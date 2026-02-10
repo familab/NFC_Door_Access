@@ -57,8 +57,8 @@ class TestLoggingUtils(unittest.TestCase):
         try:
             logging_utils.setup_logger(log_file)
 
-            # Record various actions
-            logging_utils.record_action("Door Opened")
+            # Record various actions (include unit_test badge id for tests)
+            logging_utils.record_action("Door Opened", "unit_test", "Success")
             logging_utils.record_action("Badge Scanned", "ABC123", "Granted")
             logging_utils.record_action("Invalid Badge", "XYZ789", "Denied")
 
@@ -67,6 +67,7 @@ class TestLoggingUtils(unittest.TestCase):
                 log_contents = f.read()
 
             self.assertIn("Door Opened", log_contents)
+            self.assertIn("unit_test", log_contents)
             self.assertIn("ABC123", log_contents)
             self.assertIn("Granted", log_contents)
             self.assertIn("XYZ789", log_contents)
@@ -511,6 +512,25 @@ class TestLoggingUtils(unittest.TestCase):
 
             for n in names:
                 self.assertFalse(os.path.exists(os.path.join(tmpdir, n)))
+
+    def test_cleanup_ingests_action_log_before_delete(self):
+        """Cleanup should ingest old action logs before deletion."""
+        import tempfile
+        from datetime import date, timedelta
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_date = date.today() - timedelta(days=10)
+            action_name = f"door_controller_action-{old_date:%Y-%m-%d}.txt"
+            action_path = os.path.join(tmpdir, action_name)
+            with open(action_path, "w", encoding="utf-8") as handle:
+                handle.write("2026-02-08 12:00:00 - door_action - INFO - Manual Lock - Status: Success\n")
+
+            config.config["LOG_FILE"] = os.path.join(tmpdir, "door_controller.txt")
+            config.config["LOG_RETENTION_DAYS"] = 7
+            with patch("lib.logging_utils.ingest_action_log_file") as ingest_mock:
+                logging_utils.cleanup_old_logs(retention_days=7)
+                ingest_mock.assert_called_once_with(action_path)
+            self.assertFalse(os.path.exists(action_path))
 
 
 if __name__ == '__main__':

@@ -5,6 +5,7 @@ import socket
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
+from urllib.parse import urlsplit
 
 from ..config import config
 from ..logging_utils import get_logger
@@ -13,10 +14,12 @@ from ..openapi import get_openapi_spec
 from .state import APPLICATION_JSON, TEXT_HTML
 from . import routes_public
 from . import routes_admin
+from . import routes_metrics
 
 
 # Paths that do not require authentication
-PUBLIC_PATHS = {"/", "/health", "/docs"}
+PUBLIC_PATHS = {"/", "/health"}
+NOT_FOUND = "Not Found"
 
 
 def _check_auth(handler: BaseHTTPRequestHandler) -> bool:
@@ -99,9 +102,17 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
-        path = self.path.split("?")[0]
+        parsed = urlsplit(self.path)
+        path = parsed.path
+        raw_query = parsed.query
 
-        if path in ("/", "/health"):
+        if path == "/":
+            self.send_response(302)
+            self.send_header("Location", "/health")
+            self.end_headers()
+            return
+
+        if path == "/health":
             routes_public.send_health_page(self)
             return
 
@@ -120,13 +131,21 @@ class RequestHandler(BaseHTTPRequestHandler):
             routes_admin.send_admin_page(self)
             return
 
+        if path == "/metrics":
+            routes_metrics.send_metrics_page(self, raw_query)
+            return
+
+        if path == "/api/metrics":
+            if routes_metrics.handle_unified_metrics_api(self, raw_query):
+                return
+
         if path.startswith("/admin/download/"):
             if routes_admin.handle_download(self, path):
                 return
-            self.send_error(404, "Not Found")
+            self.send_error(404, NOT_FOUND)
             return
 
-        self.send_error(404, "Not Found")
+        self.send_error(404, NOT_FOUND)
 
     def do_POST(self):
         try:
@@ -136,7 +155,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
-        path = self.path.split("?")[0]
+        parsed = urlsplit(self.path)
+        path = parsed.path
 
         if path == "/api/refresh_badges":
             if not self._require_auth():
@@ -144,7 +164,19 @@ class RequestHandler(BaseHTTPRequestHandler):
             if routes_admin.handle_post_refresh_badges(self):
                 return
 
-        self.send_error(404, "Not Found")
+        if path == "/api/toggle":
+            if not self._require_auth():
+                return
+            if routes_admin.handle_post_toggle(self):
+                return
+
+        if path == "/api/metrics/reload":
+            if not self._require_auth():
+                return
+            if routes_metrics.handle_metrics_reload_post(self):
+                return
+
+        self.send_error(404, NOT_FOUND)
 
     def log_message(self, format, *args):
         get_logger().info(f"Health server: {format % args}")

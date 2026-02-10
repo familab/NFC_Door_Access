@@ -4,6 +4,8 @@ from .config import config
 from .logging_utils import logger
 from .version import __version__
 
+GRAPH_DATA_DESCRIPTION = "Graph data"
+
 
 def get_openapi_spec(host: Optional[str] = None) -> Dict:
     """Return an OpenAPI 3.0 spec as a Python dict.
@@ -59,6 +61,55 @@ def get_openapi_spec(host: Optional[str] = None) -> Dict:
                         "200": {"description": "Refresh completed (JSON)"},
                         "500": {"description": "Internal server error"},
                         "503": {"description": "Service unavailable (no refresh callback)"}
+                    },
+                    "security": [{"basicAuth": []}]
+                }
+            },
+            "/api/toggle": {
+                "post": {
+                    "summary": "Toggle door lock state",
+                    "description": "Uses the existing manual unlock/lock implementation and returns the new state.",
+                    "responses": {
+                        "200": {"description": "Door state toggled"},
+                        "500": {"description": "Internal server error"},
+                        "503": {"description": "Door toggle callback unavailable"}
+                    },
+                    "security": [{"basicAuth": []}]
+                }
+            },
+            "/api/metrics": {
+                "get": {
+                    "summary": "Unified metrics data endpoint",
+                    "description": (
+                        "Returns structured metrics events for the requested date range. "
+                        "Defaults: start=Jan 1 of current year, end=today. "
+                        "Maximum range: 365 days (returns 400 if exceeded). "
+                        "Note: the payload excludes raw log messages (no raw_message field)."
+                    ),
+                    "parameters": [
+                        {"name": "start", "in": "query", "schema": {"type": "string", "format": "date"}, "description": "Start date (inclusive)"},
+                        {"name": "end", "in": "query", "schema": {"type": "string", "format": "date"}, "description": "End date (inclusive)"},
+                        {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1}, "description": "Page number"},
+                        {"name": "page_size", "in": "query", "schema": {"type": "integer", "minimum": 1}, "description": "Events per page"},
+                        {"name": "format", "in": "query", "schema": {"type": "string", "enum": ["json", "csv"]}, "description": "Optional: return CSV (csv) or JSON (json, default)"}
+                    ],
+                    "responses": {
+                        "200": {"description": "Structured metrics (JSON) or CSV attachment"},
+                        "400": {"description": "Bad request (e.g., date range > 365 days)"},
+                        "401": {"description": "Unauthorized"},
+                        "500": {"description": "Internal server error"}
+                    },
+                    "security": [{"basicAuth": []}]
+                }
+            },
+            "/api/metrics/reload": {
+                "post": {
+                    "summary": "Trigger metrics reload/ingestion",
+                    "description": "Trigger a manual metrics reload/ingestion. Rate-limited (5 minutes). Requires Basic Auth.",
+                    "responses": {
+                        "200": {"description": "Reload accepted"},
+                        "429": {"description": "Rate limited"},
+                        "401": {"description": "Unauthorized"}
                     },
                     "security": [{"basicAuth": []}]
                 }

@@ -12,12 +12,13 @@ _door_is_open = False
 _door_status_updated = datetime.now()
 
 
-def set_door_status(is_open: bool):
+def set_door_status(is_open: bool, badge_id: int | str = -1):
     """
     Set the door status in a thread-safe manner.
 
     Args:
         is_open: True if door is open/unlocked, False if closed/locked
+        badge_id: Optional badge identifier (default -1 means unknown/not provided)
     """
     global _door_is_open, _door_status_updated
 
@@ -30,7 +31,9 @@ def set_door_status(is_open: bool):
         if previous_status != is_open:
             status_str = "OPEN/UNLOCKED" if is_open else "CLOSED/LOCKED"
             get_logger().info(f"Door status changed to: {status_str}")
-            record_action(f"Door {status_str}")
+            # Only pass badge_id to record_action when provided
+            badge_for_log = None if badge_id == -1 else str(badge_id)
+            record_action(f"Door {status_str}", badge_for_log)
 
 
 def get_door_status() -> bool:
@@ -76,12 +79,13 @@ class DoorController:
         self.unlock_timer = None
         self.logger = get_logger()
 
-    def unlock_door(self, duration: Optional[int] = None):
+    def unlock_door(self, duration: Optional[int] = None, badge_id: int | str = -1):
         """
         Unlock the door for a specified duration.
 
         Args:
             duration: Unlock duration in seconds. If None, uses config default.
+            badge_id: Optional badge identifier to attribute this action to
         """
         duration = duration or config["UNLOCK_DURATION"]
 
@@ -91,7 +95,7 @@ class DoorController:
             # If the door is currently closed, physically unlock it
             if not currently_open:
                 self.gpio.output(self.relay_pin, self.gpio.HIGH)
-                set_door_status(True)
+                set_door_status(True, badge_id)
                 self.logger.info(f"Door unlocked for {duration} seconds")
             else:
                 # Door already open - just refresh timer
@@ -104,10 +108,11 @@ class DoorController:
                 except Exception:
                     pass
 
+            # Note: lock_door is used as the timer callback; we don't pass badge_id there because
+            # temporary unlocks use a separate timer with relock logic in unlock_temporarily
             self.unlock_timer = threading.Timer(duration, self.lock_door)
             self.unlock_timer.start()
-
-    def lock_door(self):
+    def lock_door(self, badge_id: int | str = -1):
         """Lock the door."""
         with self.gpio_lock:
             if self.unlock_timer is not None:
@@ -116,21 +121,22 @@ class DoorController:
 
             if get_door_status():  # Only lock if currently unlocked
                 self.gpio.output(self.relay_pin, self.gpio.LOW)
-                set_door_status(False)
+                set_door_status(False, badge_id)
                 self.logger.info("Door locked")
 
-    def unlock_temporarily(self, duration: int):
+    def unlock_temporarily(self, duration: int, badge_id: int | str = -1):
         """
         Unlock the door temporarily (e.g., for badge scan).
 
         Args:
             duration: Duration in seconds
+            badge_id: Optional badge identifier to attribute this temporary unlock to
         """
         with self.gpio_lock:
             previous_status = get_door_status()
 
             self.gpio.output(self.relay_pin, self.gpio.HIGH)
-            set_door_status(True)
+            set_door_status(True, badge_id)
             self.logger.info(f"Door unlocked temporarily for {duration} seconds")
 
             # Use threading.Timer for non-blocking delay
@@ -139,7 +145,7 @@ class DoorController:
                     # Only relock if we're not in a longer unlock period
                     if not (self.unlock_timer and self.unlock_timer.is_alive()):
                         self.gpio.output(self.relay_pin, self.gpio.LOW)
-                        set_door_status(False)
+                        set_door_status(False, badge_id)
                         self.logger.info("Door auto-locked after temporary unlock")
 
             timer = threading.Timer(duration, relock)

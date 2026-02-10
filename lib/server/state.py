@@ -20,11 +20,15 @@ _pn532_lock = threading.Lock()
 
 # Badge refresh callback (set by start.py)
 _badge_refresh_fn = None
+_door_toggle_fn = None
 
 # Rate limit: last time each action was allowed (seconds since epoch)
 _last_badge_refresh_time = 0.0
 _last_state_refresh_time = 0.0
+_last_metrics_reload_time = 0.0
+_last_door_toggle_time = 0.0
 _rate_limit_seconds = 300  # 5 minutes
+_door_toggle_rate_limit_seconds = 5  # 5 seconds
 _rate_limit_lock = threading.Lock()
 
 # Health caching (cached for a configurable number of minutes)
@@ -67,6 +71,17 @@ def get_badge_refresh_callback():
     return _badge_refresh_fn
 
 
+def set_door_toggle_callback(fn):
+    """Register a callback for manual door lock/unlock toggle."""
+    global _door_toggle_fn
+    _door_toggle_fn = fn
+
+
+def get_door_toggle_callback():
+    """Return the registered door toggle callback or None."""
+    return _door_toggle_fn
+
+
 def check_rate_limit_badge_refresh() -> tuple[bool, str]:
     """Return (True, '') if allowed, else (False, error_message)."""
     import time as _time
@@ -90,6 +105,43 @@ def check_rate_limit_state_refresh() -> tuple[bool, str]:
             wait = int(_rate_limit_seconds - (now - _last_state_refresh_time))
             return False, f"Rate limited. Try again in {wait} seconds."
         _last_state_refresh_time = now
+    return True, ""
+
+
+def check_rate_limit_metrics_reload() -> tuple[bool, str]:
+    """Return (True, '') if allowed, else (False, error_message)."""
+    import time as _time
+    global _last_metrics_reload_time
+    with _rate_limit_lock:
+        now = _time.time()
+        if now - _last_metrics_reload_time < _rate_limit_seconds:
+            wait = int(_rate_limit_seconds - (now - _last_metrics_reload_time))
+            return False, f"Rate limited. Try again in {wait} seconds."
+        _last_metrics_reload_time = now
+    return True, ""
+
+
+def get_seconds_until_next_metrics_reload() -> int:
+    """Return seconds until metrics reload is available again (based on rate limit)."""
+    import time as _time
+    global _last_metrics_reload_time
+    with _rate_limit_lock:
+        now = _time.time()
+        elapsed = now - _last_metrics_reload_time
+        wait = int(max(0, _rate_limit_seconds - elapsed))
+        return wait
+
+
+def check_rate_limit_door_toggle() -> tuple[bool, str]:
+    """Return (True, '') if allowed, else (False, error_message)."""
+    import time as _time
+    global _last_door_toggle_time
+    with _rate_limit_lock:
+        now = _time.time()
+        if now - _last_door_toggle_time < _door_toggle_rate_limit_seconds:
+            wait = int(_door_toggle_rate_limit_seconds - (now - _last_door_toggle_time))
+            return False, f"Rate limited. Try again in {wait} seconds."
+        _last_door_toggle_time = now
     return True, ""
 
 

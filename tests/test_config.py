@@ -15,6 +15,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config["RELAY_PIN"], DEFAULT_CONFIG["RELAY_PIN"])
         self.assertEqual(config["UNLOCK_DURATION"], DEFAULT_CONFIG["UNLOCK_DURATION"])
         self.assertEqual(config["HEALTH_SERVER_PORT"], DEFAULT_CONFIG["HEALTH_SERVER_PORT"])
+        self.assertEqual(config["METRICS_DB_PATH"], DEFAULT_CONFIG["METRICS_DB_PATH"])
 
     def test_config_file_override(self):
         """Test that config file overrides defaults."""
@@ -37,14 +38,17 @@ class TestConfig(unittest.TestCase):
         """Test that environment variables override config."""
         os.environ["DOOR_RELAY_PIN"] = "42"
         os.environ["DOOR_HEALTH_PORT"] = "9090"
+        os.environ["DOOR_METRICS_DB_PATH"] = "/tmp/metrics"
 
         try:
             config = Config()
             self.assertEqual(config["RELAY_PIN"], int(os.environ["DOOR_RELAY_PIN"]))
             self.assertEqual(config["HEALTH_SERVER_PORT"], int(os.environ["DOOR_HEALTH_PORT"]))
+            self.assertEqual(config["METRICS_DB_PATH"], os.environ["DOOR_METRICS_DB_PATH"])
         finally:
             del os.environ["DOOR_RELAY_PIN"]
             del os.environ["DOOR_HEALTH_PORT"]
+            del os.environ["DOOR_METRICS_DB_PATH"]
 
     def test_get_method(self):
         """Test the get method with default values."""

@@ -25,6 +25,7 @@ DEFAULT_CONFIG = {
     "CSV_FILE": "google_sheet_data.csv",
     "CREDS_FILE": "creds.json",
     "LOG_FILE": "logs/door_controller.log",
+    "METRICS_DB_PATH": "logs/metrics",
     # Watchdog heartbeat file (single, non-dated file). It records the last time the watchdog ran.
     "WATCHDOG_FILE": "logs/door_controller_watchdog_heartbeat.txt",
 
@@ -80,6 +81,7 @@ class Config:
             "DOOR_CSV_FILE": "CSV_FILE",
             "DOOR_CREDS_FILE": "CREDS_FILE",
             "DOOR_LOG_FILE": "LOG_FILE",
+            "DOOR_METRICS_DB_PATH": "METRICS_DB_PATH",
             "DOOR_HEALTH_PORT": "HEALTH_SERVER_PORT",
             "DOOR_HEALTH_USERNAME": "HEALTH_SERVER_USERNAME",
             "DOOR_HEALTH_PASSWORD": "HEALTH_SERVER_PASSWORD",

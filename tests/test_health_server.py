@@ -5,7 +5,7 @@ import time
 import unittest
 from datetime import datetime
 from io import BytesIO
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 
 import base64
 
@@ -253,7 +253,7 @@ class TestRequestHandler(unittest.TestCase):
 
             # If the server is single-threaded, the two requests would take ~1.0s (sum of sleeps);
             # with ThreadingHTTPServer they should complete close to the single sleep duration.
-            self.assertTrue(elapsed < 1.2, f"Requests took too long: {elapsed}")
+            self.assertLess(elapsed, 1.2, f"Requests took too long: {elapsed}")
             self.assertEqual(len(results), 2)
         finally:
             hs.stop()
@@ -297,6 +297,8 @@ class TestRequestHandler(unittest.TestCase):
         body = handler.wfile.getvalue()
         self.assertIn(b"Admin Dashboard", body)
         self.assertIn(b"Refresh Badge List", body)
+        self.assertIn(b"toggleDoorBtn", body)
+        self.assertIn(b"/metrics", body)
         self.assertNotIn(b"Refresh System State", body)
         self.assertIn(b"Last 50 System Log Lines", body)
         self.assertIn(b"Last 50 Action Log Lines", body)
@@ -413,13 +415,20 @@ class TestRequestHandler(unittest.TestCase):
         credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
         handler = self._create_handler(auth_header=f"Basic {credentials}", path="/api/refresh_badges")
         handler.command = "POST"
+        # Ensure Host header is present so we can assert the badge_id URL is derived from it
+        handler.headers["Host"] = "example.local:8888"
         mock_cb = Mock(return_value=(True, "5 badges"))
         server.set_badge_refresh_callback(mock_cb)
         with patch("lib.server.routes_admin.check_rate_limit_badge_refresh", return_value=(True, "")), patch(
             "lib.server.routes_admin.update_last_badge_download"
-        ), patch("lib.server.routes_admin.record_action"):
+        ), patch("lib.server.routes_admin.record_action") as mock_record:
             handler.do_POST()
         mock_cb.assert_called_once()
+        # Ensure record_action was called with badge_id set to the request host URL
+        called_args, called_kwargs = mock_record.call_args
+        self.assertEqual(called_args[0], "Manual Badge Refresh")
+        self.assertEqual(called_kwargs.get("badge_id"), "http://example.local:8888")
+        self.assertEqual(called_kwargs.get("status"), "Success")
         body = handler.wfile.getvalue()
         self.assertIn(b"200", body)
         self.assertIn(b"5 badges", body)
@@ -437,6 +446,134 @@ class TestRequestHandler(unittest.TestCase):
         body = handler.wfile.getvalue()
         self.assertIn(b"429", body)
         self.assertIn(b"Rate limited", body)
+
+    def test_toggle_requires_auth(self):
+        """POST /api/toggle without auth returns 401."""
+        handler = self._create_handler(path="/api/toggle")
+        handler.command = "POST"
+        handler.do_POST()
+        body = handler.wfile.getvalue()
+        self.assertIn(b"401", body)
+
+    def test_toggle_calls_callback(self):
+        """POST /api/toggle calls registered callback and returns updated state and logs the action."""
+        credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
+        handler = self._create_handler(auth_header=f"Basic {credentials}", path="/api/toggle", method="POST")
+        # set a Host header and X-Forwarded-For to simulate proxy/public IP
+        handler.headers["Host"] = "admin.local:8080"
+        handler.headers["X-Forwarded-For"] = "203.0.113.55, 10.0.0.1"
+        mock_toggle = MagicMock(return_value="unlocked")
+        with patch("lib.server.routes_admin.get_door_toggle_callback", return_value=mock_toggle):
+            with patch("lib.server.routes_admin.record_action") as mock_record:
+                handler.do_POST()
+                mock_toggle.assert_called()
+                # ensure toggle was called with the badge_id composed of host/client/public
+                called_args = mock_toggle.call_args[0]
+                self.assertTrue(called_args)
+                badge_val = str(called_args[0])
+                self.assertIn("host=admin.local:8080", badge_val)
+                self.assertIn("public=203.0.113.55", badge_val)
+                mock_record.assert_called()
+                args, kwargs = mock_record.call_args
+                self.assertEqual(args[0], "Manual Door Toggle")
+        body = handler.wfile.getvalue()
+        self.assertIn(b"200", body)
+        self.assertIn(b'"state": "unlocked"', body)
+        self.assertIn(b'"next_action": "Lock Door"', body)
+
+    def test_metrics_page_authenticated(self):
+        """GET /metrics with auth renders metrics dashboard."""
+        credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
+        auth_header = f"Basic {credentials}"
+        handler = self._create_handler(auth_header=auth_header, path="/metrics")
+        handler.do_GET()
+        body = handler.wfile.getvalue()
+        self.assertIn(b"Door Metrics", body)
+        self.assertIn(b"Load/Refresh", body)
+        self.assertIn(b"Manual Load Data", body)
+        # Checkbox to include events without a badge id (default off)
+        self.assertIn(b'id="chkIncludeNoBadge"', body)
+        self.assertIn(b'Include No Badge', body)
+        # ensure it's default unchecked (no 'checked' attribute present for the input)
+        self.assertIn(b'<input type="checkbox" id="chkIncludeNoBadge"', body)
+
+    def test_metrics_reload_button_disabled_when_rate_limited(self):
+        """Metrics page shows disabled reload button when rate-limited."""
+        credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
+        auth_header = f"Basic {credentials}"
+        with patch("lib.server.routes_metrics.get_seconds_until_next_metrics_reload", return_value=120):
+            handler = self._create_handler(auth_header=auth_header, path="/metrics")
+            handler.do_GET()
+            body = handler.wfile.getvalue()
+            self.assertIn(b"Manual Load Data (120s)", body)
+            self.assertIn(b"disabled", body)
+
+    def test_metrics_api_unified_endpoint_returns_events(self):
+        """GET /api/metrics returns structured events JSON payload."""
+        credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
+        auth_header = f"Basic {credentials}"
+        handler = self._create_handler(auth_header=auth_header, path="/api/metrics?start=2026-02-08&end=2026-02-08")
+        with patch(
+            "lib.server.routes_metrics.query_events_range",
+            return_value=[
+                {"ts": "2026-02-08 10:00:00", "event_type": "Badge Scan", "badge_id": "abc", "status": "Granted", "raw_message": "x"},
+                {"ts": "2026-02-08 10:15:00", "event_type": "Badge Scan", "badge_id": "def", "status": "Denied", "raw_message": "y"},
+            ],
+        ):
+            handler.do_GET()
+        body = handler.wfile.getvalue()
+        self.assertIn(b"200", body)
+        self.assertIn(b'"events"', body)
+        self.assertIn(b'"total_events": 2', body)
+
+    def test_metrics_pagination(self):
+        """GET /api/metrics with pagination returns paginated items."""
+        credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
+        auth_header = f"Basic {credentials}"
+        handler = self._create_handler(
+            auth_header=auth_header,
+            path="/api/metrics?start=2026-02-08&end=2026-02-08&page=1&page_size=1",
+        )
+        with patch(
+            "lib.server.routes_metrics.query_events_range",
+            return_value=[
+                {"ts": "2026-02-08 10:00:00", "event_type": "Badge Scan", "badge_id": "abc", "status": "Granted", "raw_message": "x"},
+                {"ts": "2026-02-08 10:10:00", "event_type": "Manual Lock", "badge_id": None, "status": "Success", "raw_message": "y"},
+            ],
+        ):
+            handler.do_GET()
+        body = handler.wfile.getvalue()
+        self.assertIn(b"200", body)
+        self.assertIn(b'"total_events": 2', body)
+        self.assertIn(b'"page_size": 1', body)
+
+    def test_metrics_export_json(self):
+        """GET /api/metrics?format=json returns JSON for range."""
+        credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
+        auth_header = f"Basic {credentials}"
+        handler = self._create_handler(auth_header=auth_header, path="/api/metrics?start=2026-02-01&end=2026-02-01&format=json")
+        with patch(
+            "lib.server.routes_metrics.query_events_range",
+            return_value=[{"ts": "2026-02-01 10:00:00", "event_type": "Manual Lock", "badge_id": None, "status": "Success", "raw_message": "x"}],
+        ):
+            handler.do_GET()
+        body = handler.wfile.getvalue()
+        self.assertIn(b"200", body)
+        self.assertIn(b"Manual Lock", body)
+
+    def test_metrics_export_csv(self):
+        """GET /api/metrics?format=csv returns downloadable CSV for range."""
+        credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
+        auth_header = f"Basic {credentials}"
+        handler = self._create_handler(auth_header=auth_header, path="/api/metrics?start=2026-02-01&end=2026-02-01&format=csv")
+        with patch(
+            "lib.server.routes_metrics.query_events_range",
+            return_value=[{"ts": "2026-02-01 10:00:00", "event_type": "Manual Lock", "badge_id": None, "status": "Success", "raw_message": "x"}],
+        ):
+            handler.do_GET()
+        body = handler.wfile.getvalue()
+        self.assertIn(b"200", body)
+        self.assertIn(b"ts,event_type,badge_id,status,raw_message", body)
 
 
     def test_download_system_current_requires_auth(self):
