@@ -396,6 +396,138 @@ def month_events_to_csv(events: Sequence[Dict[str, Optional[str]]]) -> str:
     return output.getvalue()
 
 
+# ---------------------------------------------------------------------------
+# Event pairing and latency helpers (pure-Python versions used for testing)
+# ---------------------------------------------------------------------------
+
+def _normalize_event_type_py(raw_event: Optional[str]) -> str:
+    """Normalize a raw event string into a simple token (Python helper)."""
+    if raw_event is None:
+        return "unknown"
+    et = str(raw_event).lower()
+    et = re.sub(r"\(.*\)", "", et).strip()
+    et = re.sub(r"\s+", " ", et)
+    if not et:
+        return "unknown"
+    if "manual lock" in et:
+        return "manual_lock"
+    if "manual unlock" in et:
+        return "manual_unlock"
+    if "scan" in et or "badge" in et:
+        return "scan"
+    if "open" in et or "unlocked" in et:
+        return "open"
+    if "close" in et or "closed" in et or "locked" in et:
+        return "close"
+    key = re.sub(r"\W+", "_", et).strip("_")
+    return key or et
+
+
+def compute_open_durations(events: Sequence[Dict[str, Optional[str]]]) -> List[Dict[str, Optional[float]]]:
+    """Compute open->close durations (seconds) by pairing chronological events.
+
+    Returns a list of dicts: {'open_ts': str, 'close_ts': str, 'duration': float, 'badge_id': Optional[str]}
+
+    Pairing strategy: sort 'open' events and 'close' events separately by timestamp, then for each open
+    find the next close with ts > open.ts and pair them once. Unpaired opens are ignored.
+    """
+    opens = []
+    closes = []
+    for e in events:
+        et = _normalize_event_type_py(e.get("event_type"))
+        if et == "open":
+            opens.append(e)
+        elif et == "close":
+            closes.append(e)
+    def _to_dt(s: str) -> Optional[datetime]:
+        try:
+            return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+    opens_sorted = sorted(opens, key=lambda x: _to_dt(x.get("ts") or "" ) or datetime.min)
+    closes_sorted = sorted(closes, key=lambda x: _to_dt(x.get("ts") or "" ) or datetime.min)
+
+    results: List[Dict[str, Optional[float]]] = []
+    cidx = 0
+    for o in opens_sorted:
+        o_dt = _to_dt(o.get("ts") or "")
+        if o_dt is None:
+            continue
+        # advance to a close strictly after open
+        while cidx < len(closes_sorted):
+            c_dt = _to_dt(closes_sorted[cidx].get("ts") or "")
+            if c_dt is None or c_dt <= o_dt:
+                cidx += 1
+                continue
+            # pair
+            duration = (c_dt - o_dt).total_seconds()
+            results.append({
+                "open_ts": o.get("ts"),
+                "close_ts": closes_sorted[cidx].get("ts"),
+                "duration": duration,
+                "badge_id": o.get("badge_id") or None,
+            })
+            cidx += 1
+            break
+    return results
+
+
+def compute_scan_to_open_latencies(events: Sequence[Dict[str, Optional[str]]], max_window: int = 60) -> List[Dict[str, Optional[float]]]:
+    """Compute scan->next-open latencies (seconds) pairing scans to the next open event within max_window seconds.
+
+    Returns list of dicts: {'scan_ts', 'open_ts', 'delta', 'badge_id'}
+    """
+    scans = [e for e in events if _normalize_event_type_py(e.get("event_type")) == "scan"]
+    opens = [e for e in events if _normalize_event_type_py(e.get("event_type")) == "open"]
+
+    def _to_dt(s: str) -> Optional[datetime]:
+        try:
+            return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+
+    scans_sorted = sorted(scans, key=lambda x: _to_dt(x.get("ts") or "") or datetime.min)
+    opens_sorted = sorted(opens, key=lambda x: _to_dt(x.get("ts") or "") or datetime.min)
+
+    res: List[Dict[str, Optional[float]]] = []
+    oidx = 0
+    for s in scans_sorted:
+        s_dt = _to_dt(s.get("ts") or "")
+        if s_dt is None:
+            continue
+        while oidx < len(opens_sorted) and ( _to_dt(opens_sorted[oidx].get("ts") or "") or datetime.min ) < s_dt:
+            oidx += 1
+        if oidx < len(opens_sorted):
+            o_dt = _to_dt(opens_sorted[oidx].get("ts") or "")
+            if o_dt is None:
+                continue
+            delta = (o_dt - s_dt).total_seconds()
+            if 0 <= delta <= max_window:
+                res.append({
+                    "scan_ts": s.get("ts"),
+                    "open_ts": opens_sorted[oidx].get("ts"),
+                    "delta": delta,
+                    "badge_id": s.get("badge_id") or None,
+                })
+    return res
+
+
+def compute_basic_stats(values: Sequence[float]) -> Dict[str, Optional[float]]:
+    """Return simple stats: count, avg, median, p95 (or None for empty)."""
+    import statistics
+    if not values:
+        return {"count": 0, "avg": None, "median": None, "p95": None}
+    vals = sorted(values)
+    count = len(vals)
+    avg = sum(vals) / count
+    median = statistics.median(vals)
+    # p95 (use ceiling-based index to include high-tail values for small samples)
+    import math
+    idx = min(count - 1, max(0, math.ceil(0.95 * count) - 1))
+    p95 = vals[idx]
+    return {"count": count, "avg": avg, "median": median, "p95": p95}
+
+
 def reload_action_logs(log_dir: Optional[str] = None, base_path: Optional[str] = None) -> dict:
     """Scan action log files and bulk-insert parsed events into monthly DBs WITHOUT deleting or modifying log files.
 

@@ -207,6 +207,17 @@ class TestRequestHandler(unittest.TestCase):
         self.assertIn(b"SwaggerUIBundle", body)
         self.assertIn(b"favicon.ico", body)
 
+    def test_metrics_page_renders(self):
+        """GET /metrics returns metrics dashboard HTML without server-side interpolation errors."""
+        import base64
+        credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
+        auth_header = f"Basic {credentials}"
+        handler = self._create_handler(auth_header=auth_header, path="/metrics")
+        handler.do_GET()
+        body = handler.wfile.getvalue()
+        self.assertIn(b"Door Metrics", body)
+        self.assertIn(b'id="chartsGrid"', body)
+
     def test_concurrent_health_requests(self):
         """Health server should handle concurrent requests without blocking (threaded server)."""
         import urllib.request

@@ -185,7 +185,10 @@ def send_metrics_page(handler, raw_query: str):
     <button id="btnLoad">Load/Refresh</button>
     <button id="btnClearCache">Clear Cache</button>
     <button id="btnExportCSV">Export CSV</button>
+    <button id="btnExportAlerts">Export Alerts CSV</button>
     <label><input type="checkbox" id="chkIncludeNoBadge"> Include No Badge</label>
+    <span id="unitTestFilterWrapper" style="display:none; margin-left:8px;"><label><input type="checkbox" id="chkExcludeUnitTest"> Exclude 'unit_test' badges</label></span>
+    <label>Open threshold (s): <input type="number" id="openThreshold" value="300" min="10" style="width:80px;"></label>
     <span id="excludedCount" style="margin-left:8px;color:#c9c9c9;">0 events without badge</span>
     <button id="btnReload" {reload_disabled}>{reload_text}</button>
   </div>
@@ -221,6 +224,21 @@ function updateExcludedCount(events) {{
   const cnt = events.filter(e => !e.badge_id).length;
   el.textContent = `${{cnt}} event${{cnt === 1 ? '' : 's'}} without badge`;
   el.style.display = cnt ? 'inline' : 'none';
+}}
+
+// Show/hide the unit_test filter checkbox based on presence of 'unit_test' badge events
+function updateUnitTestFilterVisibility(events) {{
+  const wrapper = document.getElementById('unitTestFilterWrapper');
+  const chk = document.getElementById('chkExcludeUnitTest');
+  if (!wrapper || !chk) return;
+  const hasUnitTest = events && events.some(e => ((e.badge_id || '') === 'unit_test'));
+  if (hasUnitTest) {{
+    wrapper.style.display = '';
+    chk.checked = true; // default: exclude unit_test
+  }} else {{
+    wrapper.style.display = 'none';
+    chk.checked = false;
+  }}
 }}
 
 // Open IndexedDB
@@ -323,6 +341,7 @@ async function loadMetrics() {{
 
     latestEvents = events;
     updateExcludedCount(events);
+    updateUnitTestFilterVisibility(events);
     renderDashboard(events);
 
   }} catch (err) {{
@@ -344,17 +363,25 @@ function renderDashboard(events) {{
   renderTopBadgeUsers(events);
   renderDoorCyclesPerDay(events);
   renderDeniedScans(events);
+  renderDoorOpenDurationsOverTime(events);
+  renderDurationHistogram(events);
+  renderScanToOpenLatency(events);
+  renderLatencyHistogram(events);
+  renderDoorLeftOpenTooLong(events);
+  renderHourlyHeatmap(events);
   renderTimeline(events);
 }}
 
 // Badge scans per hour
 function renderBadgeScansPerHour(events) {{
   const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
+  const excludeUnitTest = document.getElementById('chkExcludeUnitTest')?.checked || false;
   const data = new Array(24).fill(0);
   events.forEach(e => {{
     const et = (e.event_type || '').toString().toLowerCase();
     if (et === 'scan' || et === 'badge scan' || et.includes('scan')) {{
       const badge = e.badge_id || '';
+      if (excludeUnitTest && badge === 'unit_test') return;
       if (!badge && !includeNoBadge) return; // skip events without badge_id unless included
       const hour = new Date(e.ts).getHours();
       data[hour]++;
@@ -368,11 +395,13 @@ function renderBadgeScansPerHour(events) {{
 // Top badge users
 function renderTopBadgeUsers(events) {{
   const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
+  const excludeUnitTest = document.getElementById('chkExcludeUnitTest')?.checked || false;
   const counts = {{}};
   events.forEach(e => {{
     const et = (e.event_type || '').toString().toLowerCase();
     if ((et === 'scan' || et.includes('scan') || et === 'badge scan') && e.status?.toLowerCase() === 'granted') {{
       const badge = e.badge_id || '';
+      if (excludeUnitTest && badge === 'unit_test') return;
       if (!badge && !includeNoBadge) return;
       const label = badge || '(no badge)';
       counts[label] = (counts[label] || 0) + 1;
@@ -389,11 +418,13 @@ function renderTopBadgeUsers(events) {{
 // Door cycles per day
 function renderDoorCyclesPerDay(events) {{
   const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
+  const excludeUnitTest = document.getElementById('chkExcludeUnitTest')?.checked || false;
   const counts = {{}};
   events.forEach(e => {{
     const et = (e.event_type || '').toString().toLowerCase();
     if (et === 'open' || et.includes('open') || et.includes('unlocked')) {{
       const badge = e.badge_id || '';
+      if (excludeUnitTest && badge === 'unit_test') return;
       if (!badge && !includeNoBadge) return;
       const day = e.ts.split(' ')[0];
       counts[day] = (counts[day] || 0) + 1;
@@ -409,11 +440,13 @@ function renderDoorCyclesPerDay(events) {{
 // Denied scans
 function renderDeniedScans(events) {{
   const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
+  const excludeUnitTest = document.getElementById('chkExcludeUnitTest')?.checked || false;
   const counts = {{}};
   events.forEach(e => {{
     const et = (e.event_type || '').toString().toLowerCase();
     if ((et === 'scan' || et.includes('scan') || et === 'badge scan') && e.status?.toLowerCase() === 'denied') {{
       const badge = e.badge_id || '';
+      if (excludeUnitTest && badge === 'unit_test') return;
       if (!badge && !includeNoBadge) return;
       const day = e.ts.split(' ')[0];
       counts[day] = (counts[day] || 0) + 1;
@@ -426,41 +459,221 @@ function renderDeniedScans(events) {{
   createChart('denied-scans', 'Denied Badge Scans Per Day', 'line', labels, data);
 }}
 
-// Generic chart creator
-function createChart(id, title, type, labels, data) {{
-  const cardId = `card-${{id}}`;
-  const canvasId = `chart-${{id}}`;
+// Compute open durations by pairing open->close chronologically
+function computeOpenDurations(events) {{
+  const opens = events.filter(e => {{ const et = (e.event_type||'').toString().toLowerCase(); return et === 'open' || et.includes('open') || et.includes('unlocked'); }}).sort((a,b)=> new Date(a.ts)-new Date(b.ts));
+  const closes = events.filter(e => {{ const et = (e.event_type||'').toString().toLowerCase(); return et === 'close' || et.includes('close') || et.includes('locked') || et.includes('closed'); }}).sort((a,b)=> new Date(a.ts)-new Date(b.ts));
+  const results = [];
+  let cidx = 0;
+  for (const o of opens) {{
+    while (cidx < closes.length && new Date(closes[cidx].ts) <= new Date(o.ts)) cidx++;
+    if (cidx < closes.length) {{
+      const cl = closes[cidx++];
+      const duration = (new Date(cl.ts) - new Date(o.ts)) / 1000; // seconds
+      results.push({{open_ts: o.ts, close_ts: cl.ts, duration, badge_id: o.badge_id || null}});
+    }}
+  }}
+  return results;
+}}
 
+// Render average door open duration per day
+function renderDoorOpenDurationsOverTime(events) {{
+  const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
+  const excludeUnitTest = document.getElementById('chkExcludeUnitTest')?.checked || false;
+  const durations = computeOpenDurations(events).filter(d => (includeNoBadge || d.badge_id) && !(excludeUnitTest && d.badge_id === 'unit_test'));
+  const byDay = {{}};
+  durations.forEach(d => {{
+    const day = d.open_ts.split(' ')[0];
+    byDay[day] = byDay[day] || {{total:0, count:0}};
+    byDay[day].total += d.duration;
+    byDay[day].count += 1;
+  }});
+  const labels = Object.keys(byDay).sort();
+  const data = labels.map(l => byDay[l].count ? Math.round((byDay[l].total/byDay[l].count)/60) : 0); // minutes
+  createChart('open-durations', 'Avg Door Open Duration (min)', 'line', labels, data);
+}}
+
+// Compute scan -> next open latency (seconds)
+function computeScanToOpenLatencies(events, maxWindow=60) {{
+  const scans = events.filter(e => (e.event_type||'').toString().toLowerCase().includes('scan')).sort((a,b)=> new Date(a.ts)-new Date(b.ts));
+  const opens = events.filter(e => (e.event_type||'').toString().toLowerCase().includes('open')).sort((a,b)=> new Date(a.ts)-new Date(b.ts));
+  const res = [];
+  let oidx = 0;
+  for (const s of scans) {{
+    while (oidx < opens.length && new Date(opens[oidx].ts) < new Date(s.ts)) oidx++;
+    if (oidx < opens.length) {{
+      const o = opens[oidx];
+      const delta = (new Date(o.ts) - new Date(s.ts)) / 1000;
+      if (delta >= 0 && delta <= maxWindow) res.push({{scan_ts: s.ts, open_ts: o.ts, delta, badge_id: s.badge_id || null}});
+    }}
+  }}
+  return res;
+}}
+
+// Render average scan->open latency per day
+function renderScanToOpenLatency(events) {{
+  const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
+  const excludeUnitTest = document.getElementById('chkExcludeUnitTest')?.checked || false;
+  const latencies = computeScanToOpenLatencies(events).filter(l => (includeNoBadge || l.badge_id) && !(excludeUnitTest && l.badge_id === 'unit_test'));
+  const byDay = {{}};
+  latencies.forEach(l => {{
+    const day = l.scan_ts.split(' ')[0];
+    byDay[day] = byDay[day] || {{total:0, count:0}};
+    byDay[day].total += l.delta;
+    byDay[day].count += 1;
+  }});
+  const labels = Object.keys(byDay).sort();
+  const data = labels.map(l => byDay[l].count ? Math.round(byDay[l].total/byDay[l].count) : 0); // seconds
+  createChart('scan-latency', 'Avg Scan→Open Latency (s)', 'line', labels, data);
+}}
+
+// Find door left open too long and render a small table
+function renderDoorLeftOpenTooLong(events) {{
+  const threshold = parseInt(document.getElementById('openThreshold')?.value || '300', 10);
+  const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
+  const excludeUnitTest = document.getElementById('chkExcludeUnitTest')?.checked || false;
+  const durations = computeOpenDurations(events).filter(d => (includeNoBadge || d.badge_id) && !(excludeUnitTest && d.badge_id === 'unit_test'));
+  const tooLong = durations.filter(d => d.duration > threshold);
+  // Create/Update card
+  const id = 'door-left-open';
+  let card = document.getElementById('card-'+id);
+  if (!card) {{
+    card = document.createElement('div'); card.className = 'card'; card.id = 'card-'+id; document.getElementById('chartsGrid').appendChild(card);
+  }}
+  let html = `<h2>Door Left Open Too Long (&gt; ${{threshold}}s)</h2>`;
+  html += `<p>${{tooLong.length}} instances</p>`;
+  if (tooLong.length) {{
+    html += `<table><thead><tr><th>Open Time</th><th>Duration (s)</th><th>Badge</th></tr></thead><tbody>`;
+    tooLong.slice(0,10).forEach(t => {{ html += `<tr><td>${{t.open_ts}}</td><td>${{Math.round(t.duration)}}</td><td>${{t.badge_id || ''}}</td></tr>`; }});
+    html += `</tbody></table>`;
+  }}
+  card.innerHTML = html;
+}}
+
+// Hourly activity heatmap (days x 24 hours)
+function renderHourlyHeatmap(events) {{
+  const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
+  const excludeUnitTest = document.getElementById('chkExcludeUnitTest')?.checked || false;
+  const byDayHour = {{}}; // day->{{hour:count}}
+  events.forEach(e => {{
+    const day = e.ts.split(' ')[0];
+    const hour = new Date(e.ts).getHours();
+    if (excludeUnitTest && (e.badge_id || '') === 'unit_test') return;
+    if (!includeNoBadge && !e.badge_id && (e.event_type||'').toLowerCase().includes('scan')) return;
+    byDayHour[day] = byDayHour[day] || {{}};
+    byDayHour[day][hour] = (byDayHour[day][hour] || 0) + 1;
+  }});
+  const days = Object.keys(byDayHour).sort();
+  const id = 'hourly-heatmap';
+  let card = document.getElementById('card-'+id);
+  if (!card) {{
+    card = document.createElement('div'); card.className = 'card'; card.id = 'card-'+id; document.getElementById('chartsGrid').appendChild(card);
+  }}
+  // Build table
+  let html = `<h2>Hourly Activity Heatmap</h2><table><thead><tr><th>Day</th>`;
+  for (let h=0; h<24; h++) html += `<th>${{h}}</th>`;
+  html += `</tr></thead><tbody>`;
+  let maxCount = 0;
+  days.forEach(d => Object.values(byDayHour[d]).forEach(v => {{ if (v>maxCount) maxCount=v; }}));
+  days.forEach(d => {{
+    html += `<tr><td>${{d}}</td>`;
+    for (let h=0; h<24; h++) {{
+      const v = byDayHour[d][h] || 0;
+      const intensity = maxCount ? Math.round((v/maxCount)*200) : 0;
+      const color = `rgba(78,201,176,${{0.05 + (intensity/255)}})`;
+      html += `<td style="background:${{color}}; text-align:center;">${{v || ''}}</td>`;
+    }}
+    html += `</tr>`;
+  }});
+  html += `</tbody></table>`;
+  card.innerHTML = html;
+}}
+
+// Histogram helper (bins numeric array into N bins)
+function histogramBins(values, bins=10) {{
+  if (!values || !values.length) return {{labels: [], data: []}};
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const width = (max - min) / bins || 1;
+  const bcounts = new Array(bins).fill(0);
+  const blabels = new Array(bins).fill(0).map((_,i) => `${{Math.round(min + i*width)}}-${{Math.round(min + (i+1)*width)}}`);
+  values.forEach(v => {{
+    const idx = Math.min(bins-1, Math.floor((v - min)/width));
+    bcounts[idx]++;
+  }});
+  return {{labels: blabels, data: bcounts}};
+}}
+
+// Render histogram for durations (minutes)
+function renderDurationHistogram(events) {{
+  const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
+  const excludeUnitTest = document.getElementById('chkExcludeUnitTest')?.checked || false;
+  const filtered = computeOpenDurations(events).filter(d => (includeNoBadge || d.badge_id) && !(excludeUnitTest && d.badge_id === 'unit_test')).map(d => Math.round(d.duration/60)); // minutes
+  const hist = histogramBins(filtered, 12);
+  createChart('duration-hist', 'Open Duration Histogram (min)', 'bar', hist.labels, hist.data);
+  // Percentiles
+  if (filtered.length) {{
+    filtered.sort((a,b) => a-b);
+    const p50 = filtered[Math.floor(0.5*(filtered.length-1))];
+    const p95 = filtered[Math.floor(0.95*(filtered.length-1))];
+    const id = 'duration-stats';
+    let card = document.getElementById('card-'+id);
+    if (!card) {{ card = document.createElement('div'); card.className = 'card'; card.id = 'card-'+id; document.getElementById('chartsGrid').appendChild(card); }}
+    card.innerHTML = `<h2>Duration Percentiles</h2><p>p50: ${{p50}} min, p95: ${{p95}} min</p>`;
+  }}
+}}
+
+// Render histogram for scan->open latency (s)
+function renderLatencyHistogram(events) {{
+  const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
+  const excludeUnitTest = document.getElementById('chkExcludeUnitTest')?.checked || false;
+  const lat = computeScanToOpenLatencies(events).filter(l => (includeNoBadge || l.badge_id) && !(excludeUnitTest && l.badge_id === 'unit_test'));
+  const vals = lat.map(l => Math.round(l.delta));
+  const hist = histogramBins(vals, 12);
+  createChart('latency-hist', 'Scan→Open Latency Histogram (s)', 'bar', hist.labels, hist.data);
+  if (vals.length) {{
+    vals.sort((a,b)=>a-b);
+    const p50 = vals[Math.floor(0.5*(vals.length-1))];
+    const p95 = vals[Math.floor(0.95*(vals.length-1))];
+    const id = 'latency-stats';
+    let card = document.getElementById('card-'+id);
+    if (!card) {{ card = document.createElement('div'); card.className = 'card'; card.id = 'card-'+id; document.getElementById('chartsGrid').appendChild(card); }}
+    card.innerHTML = `<h2>Latency Percentiles</h2><p>p50: ${{p50}}s, p95: ${{p95}}s</p>`;
+  }}
+}}
+
+// Export too-long-open list as CSV
+function exportTooLongCSV(events) {{
+  const threshold = parseInt(document.getElementById('openThreshold')?.value || '300', 10);
+  const durations = computeOpenDurations(events).filter(d => d.duration > threshold);
+  if (!durations.length) {{ alert('No items exceed threshold'); return; }}
+  let csv = 'open_ts,close_ts,duration_s,badge_id\\n';
+  durations.forEach(d => {{ csv += `${{d.open_ts}},${{d.close_ts}},${{Math.round(d.duration)}},"${{d.badge_id || ''}}"\\n`; }});
+}}
+
+// Reusable chart creation helper
+function createChart(id, title, type, labels, data) {{
+  const cardId = 'card-'+id;
   let card = document.getElementById(cardId);
   if (!card) {{
     card = document.createElement('div');
     card.className = 'card';
     card.id = cardId;
-    card.innerHTML = `<h2>${{title}}</h2><canvas id="${{canvasId}}"></canvas>`;
     document.getElementById('chartsGrid').appendChild(card);
-  }} else {{
-    // Update title
-    const h2 = card.querySelector('h2');
-    if (h2) h2.textContent = title;
   }}
 
-  // Replace existing canvas to clear inline size attributes and avoid cumulative scaling
-  const oldCanvas = document.getElementById(canvasId);
-  if (oldCanvas) {{
-    try {{ if (charts[id]) {{ charts[id].destroy(); }} }} catch (e) {{ /* ignore */ }}
-    const newCanvas = document.createElement('canvas');
-    newCanvas.id = canvasId;
-    newCanvas.style.width = '100%';
-    newCanvas.style.height = '260px';
-    oldCanvas.parentNode.replaceChild(newCanvas, oldCanvas);
-  }} else {{
-    const c = document.getElementById(canvasId);
-    if (c) {{ c.style.width = '100%'; c.style.height = '260px'; }}
-  }}
+  // Insert header and canvas
+  card.innerHTML = `<h2>${{title}}</h2><canvas id="chart-${{id}}"></canvas>`;
 
-  const canvas = document.getElementById(canvasId);
-  try {{ if (charts[id]) {{ charts[id].destroy(); delete charts[id]; }} }} catch (e) {{ /* ignore */ }}
+  // Destroy existing chart if present
+  try {{
+    if (charts[id] && typeof charts[id].destroy === 'function') {{
+      charts[id].destroy();
+      charts[id] = undefined;
+    }}
+  }} catch (e) {{ /* ignore */ }}
 
+  const canvas = document.getElementById('chart-'+id);
   charts[id] = new Chart(canvas, {{
     type,
     data: {{ labels, datasets: [{{ label: title, data, borderColor: '#4ec9b0', backgroundColor: 'rgba(78,201,176,0.3)' }}] }},
@@ -476,7 +689,14 @@ function renderTimeline(events) {{
   const tbody = document.getElementById('timelineBody');
   tbody.innerHTML = '';
 
-  const latest = events.slice(-100).reverse();
+  const excludeUnitTest = document.getElementById('chkExcludeUnitTest')?.checked || false;
+  const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
+  const filtered = (events || []).filter(e => {{
+    if (excludeUnitTest && (e.badge_id || '') === 'unit_test') return false;
+    if (!includeNoBadge && !(e.badge_id)) return false;
+    return true;
+  }});
+  const latest = filtered.slice(-100).reverse();
   latest.forEach(e => {{
     const tr = tbody.insertRow();
     tr.insertCell().textContent = e.ts;
@@ -499,12 +719,24 @@ function exportCSV() {{
   document.getElementById('btnLoad').addEventListener('click', loadMetrics);
   document.getElementById('btnClearCache').addEventListener('click', clearCache);
   document.getElementById('btnExportCSV').addEventListener('click', exportCSV);
+  const btnExportAlerts = document.getElementById('btnExportAlerts');
+  if (btnExportAlerts) {{ btnExportAlerts.addEventListener('click', () => exportTooLongCSV(latestEvents)); }}
 
   const chkInclude = document.getElementById('chkIncludeNoBadge');
   if (chkInclude) {{
     // default: unchecked
     chkInclude.checked = false;
     chkInclude.addEventListener('change', () => {{ renderDashboard(latestEvents); updateExcludedCount(latestEvents); }});
+  }}
+
+  const chkUnitTest = document.getElementById('chkExcludeUnitTest');
+  if (chkUnitTest) {{
+    chkUnitTest.addEventListener('change', () => {{ renderDashboard(latestEvents); updateExcludedCount(latestEvents); }});
+  }}
+
+  const openThreshold = document.getElementById('openThreshold');
+  if (openThreshold) {{
+    openThreshold.addEventListener('input', () => {{ renderDashboard(latestEvents); }});
   }}
 
   const btnReload = document.getElementById('btnReload');
@@ -558,6 +790,10 @@ function exportCSV() {{
   </script>
 </body>
 </html>"""
+
+    # Fill Python placeholders used in the HTML (keeps the inline JS simple and avoids f-string escaping issues)
+    html = html.replace("{start_date.isoformat()}", start_date.isoformat()).replace("{end_date.isoformat()}", end_date.isoformat())
+    html = html.replace("{reload_disabled}", reload_disabled).replace("{reload_text}", reload_text)
 
     handler.send_response(200)
     handler.send_header("Content-type", "text/html; charset=utf-8")
