@@ -185,26 +185,43 @@ last_lock_time = 0
 debounce_time = config["DEBOUNCE_TIME"]
 
 
-def unlock_door():
-    """Unlock door for 1 hour using door controller."""
-    record_action("Manual Unlock (1 hour)")
-    door_controller.unlock_door(UNLOCK_DURATION)
-    data_client.log_access("Manual Unlock (1 hour)", "Success")
+def unlock_door(badge_id: str | None = None):
+    """Unlock door for 1 hour using door controller.
+
+    Args:
+        badge_id: Optional badge identifier to attribute this manual action to.
+    """
+    record_action("Manual Unlock (1 hour)", badge_id=badge_id)
+    door_controller.unlock_door(UNLOCK_DURATION, badge_id=badge_id)
+    try:
+        data_client.log_access("Manual Unlock (1 hour)", "Success")
+    except Exception:
+        pass
 
 
-def lock_door():
-    """Lock door using door controller."""
-    record_action("Manual Lock")
-    door_controller.lock_door()
-    data_client.log_access("Manual Lock", "Success")
+def lock_door(badge_id: str | None = None):
+    """Lock door using door controller.
+
+    Args:
+        badge_id: Optional badge identifier to attribute this manual action to.
+    """
+    record_action("Manual Lock", badge_id=badge_id)
+    door_controller.lock_door(badge_id=badge_id)
+    try:
+        data_client.log_access("Manual Lock", "Success")
+    except Exception:
+        pass
 
 
-def _toggle_door_state():
-    """Reuse existing manual lock/unlock actions and return the new lock state."""
+def _toggle_door_state(badge_id: str | None = None):
+    """Reuse existing manual lock/unlock actions and return the new lock state.
+
+    Accepts optional badge_id which is forwarded to underlying actions for auditing.
+    """
     if get_door_status():
-        lock_door()
+        lock_door(badge_id=badge_id)
         return "locked"
-    unlock_door()
+    unlock_door(badge_id=badge_id)
     return "unlocked"
 
 

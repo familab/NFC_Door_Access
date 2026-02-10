@@ -39,6 +39,7 @@ import os
 import re
 from io import BytesIO
 from zipfile import ZipFile
+from .helpers import get_host_header, get_client_addr, get_public_ip
 
 
 def send_admin_page(handler):
@@ -343,8 +344,27 @@ def handle_post_toggle(handler) -> bool:
         )
         return True
 
+    # Attempt to call toggle_fn with badge_id if it accepts it, otherwise call without args
+    host_header = get_host_header(handler)
+    client_addr = get_client_addr(handler)
+    public_ip = get_public_ip(handler)
+
+    # Build a structured badge_id string for auditing: include host, client, and public IP where available
+    parts = []
+    if host_header:
+        parts.append(f"host={host_header}")
+    if client_addr:
+        parts.append(f"client={client_addr}")
+    if public_ip:
+        parts.append(f"public={public_ip}")
+    badge_id_for_toggle = ";".join(parts) if parts else None
+
     try:
-        new_state = str(toggle_fn()).strip().lower()
+        try:
+            new_state = str(toggle_fn(badge_id_for_toggle)).strip().lower()
+        except TypeError:
+            # fallback: function doesn't accept args
+            new_state = str(toggle_fn()).strip().lower()
     except Exception as exc:
         get_logger().error(f"Door toggle failed: {exc}")
         handler.send_response(500)
@@ -357,6 +377,12 @@ def handle_post_toggle(handler) -> bool:
         new_state = "unlocked" if get_door_status() else "locked"
     label = "Lock Door" if new_state == "unlocked" else "Unlock Door"
     icon = "unlocked" if new_state == "unlocked" else "locked"
+    # Record the manual toggle action for auditing
+    try:
+        record_action("Manual Door Toggle", badge_id=badge_id_for_toggle, status="Success")
+    except Exception:
+        # Don't let auditing errors affect the response
+        pass
     handler.send_response(200)
     handler.send_header("Content-type", APPLICATION_JSON)
     handler.end_headers()

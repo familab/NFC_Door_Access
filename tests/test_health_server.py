@@ -5,7 +5,7 @@ import time
 import unittest
 from datetime import datetime
 from io import BytesIO
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 
 import base64
 
@@ -456,11 +456,26 @@ class TestRequestHandler(unittest.TestCase):
         self.assertIn(b"401", body)
 
     def test_toggle_calls_callback(self):
-        """POST /api/toggle calls registered callback and returns updated state."""
+        """POST /api/toggle calls registered callback and returns updated state and logs the action."""
         credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
         handler = self._create_handler(auth_header=f"Basic {credentials}", path="/api/toggle", method="POST")
-        with patch("lib.server.routes_admin.get_door_toggle_callback", return_value=lambda: "unlocked"):
-            handler.do_POST()
+        # set a Host header and X-Forwarded-For to simulate proxy/public IP
+        handler.headers["Host"] = "admin.local:8080"
+        handler.headers["X-Forwarded-For"] = "203.0.113.55, 10.0.0.1"
+        mock_toggle = MagicMock(return_value="unlocked")
+        with patch("lib.server.routes_admin.get_door_toggle_callback", return_value=mock_toggle):
+            with patch("lib.server.routes_admin.record_action") as mock_record:
+                handler.do_POST()
+                mock_toggle.assert_called()
+                # ensure toggle was called with the badge_id composed of host/client/public
+                called_args = mock_toggle.call_args[0]
+                self.assertTrue(called_args)
+                badge_val = str(called_args[0])
+                self.assertIn("host=admin.local:8080", badge_val)
+                self.assertIn("public=203.0.113.55", badge_val)
+                mock_record.assert_called()
+                args, kwargs = mock_record.call_args
+                self.assertEqual(args[0], "Manual Door Toggle")
         body = handler.wfile.getvalue()
         self.assertIn(b"200", body)
         self.assertIn(b'"state": "unlocked"', body)
@@ -476,6 +491,11 @@ class TestRequestHandler(unittest.TestCase):
         self.assertIn(b"Door Metrics", body)
         self.assertIn(b"Load/Refresh", body)
         self.assertIn(b"Manual Load Data", body)
+        # Checkbox to include events without a badge id (default off)
+        self.assertIn(b'id="chkIncludeNoBadge"', body)
+        self.assertIn(b'Include No Badge', body)
+        # ensure it's default unchecked (no 'checked' attribute present for the input)
+        self.assertIn(b'<input type="checkbox" id="chkIncludeNoBadge"', body)
 
     def test_metrics_reload_button_disabled_when_rate_limited(self):
         """Metrics page shows disabled reload button when rate-limited."""

@@ -185,6 +185,8 @@ def send_metrics_page(handler, raw_query: str):
     <button id="btnLoad">Load/Refresh</button>
     <button id="btnClearCache">Clear Cache</button>
     <button id="btnExportCSV">Export CSV</button>
+    <label><input type="checkbox" id="chkIncludeNoBadge"> Include No Badge</label>
+    <span id="excludedCount" style="margin-left:8px;color:#c9c9c9;">0 events without badge</span>
     <button id="btnReload" {reload_disabled}>{reload_text}</button>
   </div>
 
@@ -206,6 +208,20 @@ const STORE_NAME = 'events';
 
 let db = null;
 let charts = {{}};
+let latestEvents = []; // most recently loaded events for re-rendering on filter changes
+
+function updateExcludedCount(events) {{
+  const el = document.getElementById('excludedCount');
+  if (!el) return;
+  if (!events || !events.length) {{
+    el.textContent = '0 events without badge';
+    el.style.display = 'none';
+    return;
+  }}
+  const cnt = events.filter(e => !e.badge_id).length;
+  el.textContent = `${{cnt}} event${{cnt === 1 ? '' : 's'}} without badge`;
+  el.style.display = cnt ? 'inline' : 'none';
+}}
 
 // Open IndexedDB
 async function openDB() {{
@@ -305,6 +321,8 @@ async function loadMetrics() {{
       updateStatus(`Loaded ${{events.length}} events from server`, 'loading');
     }}
 
+    latestEvents = events;
+    updateExcludedCount(events);
     renderDashboard(events);
 
   }} catch (err) {{
@@ -331,10 +349,13 @@ function renderDashboard(events) {{
 
 // Badge scans per hour
 function renderBadgeScansPerHour(events) {{
+  const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
   const data = new Array(24).fill(0);
   events.forEach(e => {{
     const et = (e.event_type || '').toString().toLowerCase();
     if (et === 'scan' || et === 'badge scan' || et.includes('scan')) {{
+      const badge = e.badge_id || '';
+      if (!badge && !includeNoBadge) return; // skip events without badge_id unless included
       const hour = new Date(e.ts).getHours();
       data[hour]++;
     }}
@@ -346,12 +367,15 @@ function renderBadgeScansPerHour(events) {{
 
 // Top badge users
 function renderTopBadgeUsers(events) {{
+  const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
   const counts = {{}};
   events.forEach(e => {{
     const et = (e.event_type || '').toString().toLowerCase();
     if ((et === 'scan' || et.includes('scan') || et === 'badge scan') && e.status?.toLowerCase() === 'granted') {{
-      const badge = e.badge_id || 'unknown';
-      counts[badge] = (counts[badge] || 0) + 1;
+      const badge = e.badge_id || '';
+      if (!badge && !includeNoBadge) return;
+      const label = badge || '(no badge)';
+      counts[label] = (counts[label] || 0) + 1;
     }}
   }});
 
@@ -364,10 +388,13 @@ function renderTopBadgeUsers(events) {{
 
 // Door cycles per day
 function renderDoorCyclesPerDay(events) {{
+  const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
   const counts = {{}};
   events.forEach(e => {{
     const et = (e.event_type || '').toString().toLowerCase();
     if (et === 'open' || et.includes('open') || et.includes('unlocked')) {{
+      const badge = e.badge_id || '';
+      if (!badge && !includeNoBadge) return;
       const day = e.ts.split(' ')[0];
       counts[day] = (counts[day] || 0) + 1;
     }}
@@ -381,10 +408,13 @@ function renderDoorCyclesPerDay(events) {{
 
 // Denied scans
 function renderDeniedScans(events) {{
+  const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
   const counts = {{}};
   events.forEach(e => {{
     const et = (e.event_type || '').toString().toLowerCase();
     if ((et === 'scan' || et.includes('scan') || et === 'badge scan') && e.status?.toLowerCase() === 'denied') {{
+      const badge = e.badge_id || '';
+      if (!badge && !includeNoBadge) return;
       const day = e.ts.split(' ')[0];
       counts[day] = (counts[day] || 0) + 1;
     }}
@@ -469,6 +499,13 @@ function exportCSV() {{
   document.getElementById('btnLoad').addEventListener('click', loadMetrics);
   document.getElementById('btnClearCache').addEventListener('click', clearCache);
   document.getElementById('btnExportCSV').addEventListener('click', exportCSV);
+
+  const chkInclude = document.getElementById('chkIncludeNoBadge');
+  if (chkInclude) {{
+    // default: unchecked
+    chkInclude.checked = false;
+    chkInclude.addEventListener('change', () => {{ renderDashboard(latestEvents); updateExcludedCount(latestEvents); }});
+  }}
 
   const btnReload = document.getElementById('btnReload');
   if (btnReload) {{
