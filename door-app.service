@@ -1,0 +1,39 @@
+[Unit]
+Description=Door Controller - RFID Access Control System
+After=network-online.target
+Wants=network-online.target
+Documentation=https://github.com/lastlink/familab_badge_scanner
+
+[Service]
+Type=simple
+User=pi
+# Group=gpio
+WorkingDirectory=/home/pi/badge_scanner
+Environment=PYTHONUNBUFFERED=1
+Environment=DOOR_HEALTH_PORT=3264
+# Ensure /tmp exists and write initial watchdog heartbeat (tolerate failure)
+ExecStartPre=/bin/sh -c 'mkdir -p /tmp && echo "0" > /tmp/door_controller_watchdog.txt || true'
+# Verify Python in virtualenv is executable
+ExecStartPre=/bin/sh -c 'test -x /home/pi/badge_scanner/venv/bin/python3 || (echo "Missing venv python" >&2; exit 1)'
+ExecStart=/home/pi/badge_scanner/venv/bin/python3 /home/pi/badge_scanner/start.py
+StandardOutput=journal
+StandardError=journal
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+
+# Security hardening
+# NoNewPrivileges=true
+# PrivateTmp=true
+# ProtectSystem=strict
+# ProtectHome=true
+# ReadWritePaths=/tmp /home/pi/badge_scanner
+# SupplementaryGroups=i2c
+
+# Resource limits
+# LimitNOFILE=1024
+# MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target
+

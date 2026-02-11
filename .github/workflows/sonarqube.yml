@@ -1,0 +1,158 @@
+name: SonarQube Scan
+
+# Cancel in-progress workflows when a new workflow is created. Should only apply to PRs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+# Required GitHub Secrets:
+# - SONARQUBE_URL: Your SonarQube server URL (e.g., https://sonarcloud.io)
+# - SONAR_TOKEN: Your SonarQube authentication token
+# - SONARQUBE_PROJECT_KEY: Your SonarQube project key (optional, can be set in sonar-project.properties instead)
+
+# could run on every push to dev branch
+# current goal is to manually run after verifying the build and tests are working
+on:
+  # runs on default branch
+  schedule:
+    # Run every Monday at 00:00 UTC
+    - cron: "0 0 * * 1"
+  # push:
+  #   branches:
+  #     - dev
+  #     - f/sonarqube2
+  # pull_request:
+  #   branches:
+  #     - dev
+  workflow_dispatch:
+
+env:
+  SONARQUBE_PROJECT_KEY: familab-badge-scanner
+
+jobs:
+  sonarqube:
+    name: SonarQube Analysis
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: verify secrets and length
+        run: |
+          SONAR_TOKEN="${{ secrets.SONAR_TOKEN }}"
+          SONARQUBE_URL="${{ secrets.SONARQUBE_URL }}"
+
+          echo "SONAR_TOKEN: $SONAR_TOKEN"
+          echo "SONARQUBE_URL: $SONARQUBE_URL"
+
+          echo "SONAR_TOKEN length: ${#SONAR_TOKEN}"
+          echo "SONARQUBE_URL length: ${#SONARQUBE_URL}"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Shallow clones should be disabled for better analysis
+
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@v4.1.0
+        with:
+          versionSpec: "6.3.x"
+
+      - name: Determine Version
+        id: version_step
+        uses: gittools/actions/gitversion/execute@v4.1.0
+        env:
+          DOTNET_GITVERSION_TELEMETRY_OPTOUT: 1
+        with:
+          configFilePath: ./GitVersion.yml
+
+      - name: Extract version information
+        id: extract-version
+        run: |
+          # Read GitVersion output and replace PullRequest with Patch
+          VERSION="${{ steps.version_step.outputs.SemVer }}"
+          # make 0.1.0-PullRequest99.190 to 0.1.0-Patch99.190
+          VERSION=$(echo "$VERSION" | sed 's/PullRequest/Patch/g')
+          FULL_SEMVER="${{ steps.version_step.outputs.FullSemVer }}"
+          MAJOR_MINOR_PATCH="${{ steps.version_step.outputs.MajorMinorPatch }}"
+          GIT_HASH="${{ steps.version_step.outputs.Sha }}"
+          GIT_TAG="${{ steps.version_step.outputs.PreReleaseTag }}"
+          GIT_BRANCH="${{ steps.version_step.outputs.BranchName }}"
+          COMMIT_COUNT="${{ steps.version_step.outputs.CommitsSinceVersionSource }}"
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # Create version.txt content
+          cat > version-$VERSION.txt << EOF
+          version=$VERSION
+          major_minor_patch=$MAJOR_MINOR_PATCH
+          full_semver=$FULL_SEMVER
+          git_hash=$GIT_HASH
+          git_tag=$GIT_TAG
+          git_branch=$GIT_BRANCH
+          commit_count=$COMMIT_COUNT
+          build_date=$BUILD_DATE
+          EOF
+
+          # Output version for other steps
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "MAJOR_MINOR_PATCH=$MAJOR_MINOR_PATCH" >> $GITHUB_OUTPUT
+          echo "FULL_SEMVER=$FULL_SEMVER" >> $GITHUB_OUTPUT
+          echo "GIT_HASH=$GIT_HASH" >> $GITHUB_OUTPUT
+          echo "GIT_TAG=$GIT_TAG" >> $GITHUB_OUTPUT
+          echo "GIT_BRANCH=$GIT_BRANCH" >> $GITHUB_OUTPUT
+          echo "COMMIT_COUNT=$COMMIT_COUNT" >> $GITHUB_OUTPUT
+
+          # Display version info
+          echo "Generated version: $VERSION"
+          echo "Major minor patch: $MAJOR_MINOR_PATCH"
+          echo "Full semver: $FULL_SEMVER"
+          echo "Git hash: $GIT_HASH"
+          echo "Git branch: $GIT_BRANCH"
+          echo "Commit count: $COMMIT_COUNT"
+          echo "Build date: $BUILD_DATE"
+          echo "version.txt content:"
+          cat version-$VERSION.txt
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install coverage
+
+      - name: Run tests with coverage
+        run: |
+          python -m coverage run -m unittest discover -s tests
+          python -m coverage xml -o coverage.xml
+
+      # -Dsonar.sarifReportPaths=src-tauri/results.sarif
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONARQUBE_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ env.SONARQUBE_PROJECT_KEY }}
+            -Dsonar.projectVersion=${{ steps.extract-version.outputs.VERSION }}
+            -Dsonar.sources=.
+            -Dsonar.tests=tests
+            -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/target/**,**/coverage/**,**/reports/**,**/android/**,**/ios/**,**/__pycache__/**,**/venv/**,**/.venv/**
+            -Dsonar.test.inclusions=tests/**/*.py
+            -Dsonar.test.exclusions=**/__pycache__/**,**/venv/**,**/.venv/**
+            -Dsonar.python.version=3.9
+            -Dsonar.python.coverage.reportPaths=coverage.xml
+            -Dsonar.sourceEncoding=UTF-8
+
+      # useful for pull request checks to fail pipeline
+      - name: SonarQube Quality Gate Check
+        uses: sonarsource/sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONARQUBE_URL }}

@@ -1,0 +1,189 @@
+name: Deploy
+
+# Cancel in-progress workflows when a new workflow is created for the same branch/commit
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+
+env:
+  retention_days: 1
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  build_package:
+    name: Build ZIP artifact
+    runs-on: ubuntu-latest
+    outputs:
+      artifact-name: deploy-artifact
+      VERSION: ${{ steps.extract-version.outputs.VERSION }}
+      FULL_SEMVER: ${{ steps.extract-version.outputs.FULL_SEMVER }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch full git history for version calculation
+
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@v4.1.0
+        with:
+          versionSpec: "6.3.x"
+
+      - name: Determine Version
+        id: version_step
+        uses: gittools/actions/gitversion/execute@v4.1.0
+        env:
+          DOTNET_GITVERSION_TELEMETRY_OPTOUT: 1
+        with:
+          configFilePath: ./GitVersion.yml
+
+      - name: Extract version information
+        id: extract-version
+        run: |
+          # Read GitVersion output and normalize tag
+          VERSION="${{ steps.version_step.outputs.SemVer }}"
+          VERSION=$(echo "$VERSION" | sed 's/PullRequest/Patch/g')
+          FULL_SEMVER="${{ steps.version_step.outputs.FullSemVer }}"
+          MAJOR_MINOR_PATCH="${{ steps.version_step.outputs.MajorMinorPatch }}"
+          GIT_HASH="${{ steps.version_step.outputs.Sha }}"
+          GIT_TAG="${{ steps.version_step.outputs.PreReleaseTag }}"
+          GIT_BRANCH="${{ steps.version_step.outputs.BranchName }}"
+          COMMIT_COUNT="${{ steps.version_step.outputs.CommitsSinceVersionSource }}"
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          cat > version-$VERSION.txt << EOF
+          version=$VERSION
+          major_minor_patch=$MAJOR_MINOR_PATCH
+          full_semver=$FULL_SEMVER
+          git_hash=$GIT_HASH
+          git_tag=$GIT_TAG
+          git_branch=$GIT_BRANCH
+          commit_count=$COMMIT_COUNT
+          build_date=$BUILD_DATE
+          EOF
+
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "FULL_SEMVER=$FULL_SEMVER" >> $GITHUB_OUTPUT
+          cat version-$VERSION.txt
+      - name: Update project files with version
+        run: |
+          chmod +x scripts/updateVersion.sh
+          bash scripts/updateVersion.sh
+
+      - name: Upload version.txt as artifact
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: version-info
+          path: version-${{ steps.extract-version.outputs.VERSION }}.txt
+          retention-days: ${{ env.retention_days }}
+      - name: Create deploy zip
+        run: |
+          mkdir -p build
+          # Include README, markdown files, service files, version txt, main.py, src_service, requirements.txt
+          zip -r build/deploy.zip README.md *.md *.service version*.txt main.py src_service requirements.txt || true
+          ls -l build
+
+      - name: Upload deploy artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-artifact
+          path: build/deploy.zip
+          retention-days: ${{ env.retention_days }}
+
+  await_approval:
+    name: Await Manual Approval
+    needs: build_package
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Await manual approval
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ secrets.GITHUB_TOKEN }}
+          approvers: lastlink
+          minimum-approvals: 1
+          issue-title: "Deploying ${{ needs.build_package.outputs.VERSION }} to production"
+          issue-body: "Please approve or deny the deployment of version ${{ needs.build_package.outputs.VERSION }} (commit: ${{ github.sha }})."
+          issue-body-file-path: ''
+          exclude-workflow-initiator-as-approver: false
+          fail-on-denial: true
+          additional-approved-words: ''
+          additional-denied-words: ''
+          polling-interval-seconds: 10
+
+  deploy:
+    name: Deploy to production
+    needs: [build_package, await_approval]
+    runs-on: [self-hosted]
+    environment: production
+    env:
+      CREDS_JSON: ${{ secrets.CREDS_JSON }}
+    steps:
+      - name: Download deploy artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-artifact
+          path: .
+
+      - name: Prepare deployment directory
+        run: |
+          DEPLOY_DIR=${DEPLOY_DIR:-/opt/door}
+          sudo mkdir -p "$DEPLOY_DIR"
+          sudo chown $(whoami) "$DEPLOY_DIR"
+        env:
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+
+      - name: Unpack artifact to deploy dir
+        run: |
+          DEPLOY_DIR=${DEPLOY_DIR:-/opt/door}
+          unzip -o build/deploy.zip -d "$DEPLOY_DIR"
+          ls -l "$DEPLOY_DIR"
+        env:
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+
+      - name: Write Google service account credentials (if provided)
+        if: ${{ env.CREDS_JSON != '' }}
+        run: |
+          DEPLOY_DIR=${DEPLOY_DIR:-/opt/door}
+          echo "Writing creds to $DEPLOY_DIR/creds.json"
+          echo "${{ env.CREDS_JSON }}" | sudo tee "$DEPLOY_DIR/creds.json" > /dev/null
+          sudo chmod 600 "$DEPLOY_DIR/creds.json"
+        env:
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+
+      - name: Create systemd drop-in with environment (DOOR_CREDS_FILE and health credentials)
+        run: |
+          DEPLOY_DIR=${DEPLOY_DIR:-/opt/door}
+          sudo mkdir -p /etc/systemd/system/door-app.service.d
+          sudo bash -c 'cat > /etc/systemd/system/door-app.service.d/override.conf <<EOF
+          [Service]
+          Environment="DOOR_CREDS_FILE=${DEPLOY_DIR}/creds.json"
+          Environment="DOOR_HEALTH_USERNAME=${{ secrets.DOOR_HEALTH_USERNAME }}"
+          Environment="DOOR_HEALTH_PASSWORD=${{ secrets.DOOR_HEALTH_PASSWORD }}"
+          Environment="DOOR_HEALTH_PORT=${{ vars.DOOR_HEALTH_PORT }}"
+          EOF'
+          sudo systemctl daemon-reload
+        env:
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+
+      - name: Restart door service
+        run: |
+          sudo systemctl restart door-app.service
+          sudo systemctl status door-app.service --no-pager --lines=50
+
+      - name: Finish
+        run: echo "Deployment complete"
+
+# Notes:
+# - The deploy job runs on self-hosted runner(s). Protect the `production` environment with required reviewers
+#   in repository settings to enforce approvals before deployment.
+# - Ensure repository secrets are configured: CREDS_JSON (service account JSON content), DOOR_HEALTH_USERNAME,
+#   DOOR_HEALTH_PASSWORD, and DOOR_HEALTH_PORT.
+# - Set the non-secret repository variable `DEPLOY_DIR` under: Settings → Secrets and variables → Actions → Variables
+#   (create `DEPLOY_DIR` with the desired path, e.g., `/opt/door`).

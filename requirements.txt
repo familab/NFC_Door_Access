@@ -1,0 +1,31 @@
+# Core dependencies for Door Controller
+# Raspberry Pi GPIO control
+RPi.GPIO==0.7.1; sys_platform != 'win32'
+# Windows-friendly emulator (used automatically on Windows)
+
+# Google Sheets integration
+# Note: imports are now lazy in start.py so missing packages don't crash startup
+gspread==6.2.1
+oauth2client==4.1.3
+
+# Adafruit PN532 NFC/RFID reader
+adafruit-circuitpython-pn532==2.4.7
+adafruit-blinka==8.47.0
+
+# Required by Adafruit libraries (transitive dependencies)
+adafruit-circuitpython-busdevice==5.2.15
+Adafruit-PlatformDetect==3.87.0
+Adafruit-PureIO==1.1.11
+pyftdi==0.57.1
+
+# Google API dependencies
+google-auth==2.48.0
+httplib2==0.31.2
+
+# Test reporting for CI
+xmlrunner==1.7.7
+
+# Standard library enhancements (Python compatibility)
+typing-extensions==4.15.0
+cryptography>=38.0.0
+
