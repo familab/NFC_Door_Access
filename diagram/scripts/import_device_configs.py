@@ -14,6 +14,7 @@ import argparse
 import shutil
 import subprocess
 import sys
+import os
 from pathlib import Path
 
 
@@ -54,12 +55,46 @@ def patch_schemas(pinviz_module_path: Path, dry_run: bool = False) -> bool:
 
 
 def run_validate_devices() -> int:
-    try:
-        res = subprocess.run([sys.executable, "-m", "pinviz", "validate-devices"], check=False)
-        return res.returncode
-    except FileNotFoundError:
-        print("pinviz is not available as a module in this environment")
-        return 2
+    # Prefer calling the 'pinviz' console script if available on PATH
+    pinviz_exe = shutil.which("pinviz")
+    if pinviz_exe:
+        print(f"Found pinviz executable: {pinviz_exe}")
+        env = dict(os.environ)
+        env.setdefault('PYTHONIOENCODING', 'utf-8')
+        proc = subprocess.run([pinviz_exe, "validate-devices"], capture_output=True, text=False, env=env)
+        out = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
+        err = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
+        print(out)
+        if proc.returncode != 0:
+            print(err)
+        return proc.returncode
+
+    # Try to find pinviz next to the Python executable (venv Scripts/ bin)
+    exec_dir = Path(sys.executable).parent
+    candidates = [exec_dir / "pinviz", exec_dir / "pinviz.exe"]
+    for c in candidates:
+        if c.exists():
+            print(f"Found pinviz at {c}")
+            env = dict(os.environ)
+            env.setdefault('PYTHONIOENCODING', 'utf-8')
+            proc = subprocess.run([str(c), "validate-devices"], capture_output=True, text=False, env=env)
+            out = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
+            err = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
+            print(out)
+            if proc.returncode != 0:
+                print(err)
+            return proc.returncode
+
+    # Fallback: try running as a module (may not be supported)
+    env = dict(os.environ)
+    env.setdefault('PYTHONIOENCODING', 'utf-8')
+    proc = subprocess.run([sys.executable, "-m", "pinviz", "validate-devices"], capture_output=True, text=False, env=env)
+    out = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
+    err = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
+    print(out)
+    if proc.returncode != 0:
+        print(err)
+    return proc.returncode
 
 
 def main() -> int:
