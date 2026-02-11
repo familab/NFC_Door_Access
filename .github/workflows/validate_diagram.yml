@@ -67,9 +67,15 @@ jobs:
           set -e
           pinviz render diagram/door_controller.yaml -o diagram/door_controller.svg
 
+      - name: Render Per Device Diagrams
+        if: ${{ success() }}
+        run: |
+          set -e
+          python diagram/scripts/generate_per_device_diagrams.py --input diagram/door_controller.yaml --outdir diagram/per_device --render
+
       - name: Upload generated SVG
         if: ${{ success() }}
         uses: actions/upload-artifact@v4
         with:
           name: door-controller-diagram
-          path: diagram/door_controller.svg
+          path: diagram/**/*.svg
