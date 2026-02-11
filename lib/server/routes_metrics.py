@@ -172,6 +172,12 @@ def send_metrics_page(handler, raw_query: str):
     table {{ border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 11px; }}
     th, td {{ border: 1px solid #555; padding: 4px; text-align: left; }}
     th {{ background: #2d2d30; color: #4ec9b0; }}
+    /* Timeline inner scroll */
+    .timeline-scroll {{ max-height: 360px; overflow: auto; }}
+    /* Hourly heatmap should span full width and allow inner scroll/pagination */
+    .card.full-row {{ grid-column: 1 / -1; }}
+    .hourly-heatmap-scroll {{ max-height: 520px; overflow: auto; }}
+    .heatmap-controls {{ margin-bottom: 6px; display:flex; gap:8px; align-items:center; }}
   </style>
 </head>
 <body>
@@ -198,10 +204,12 @@ def send_metrics_page(handler, raw_query: str):
 
   <div class="card">
     <h2>Event Timeline (Latest 100)</h2>
-    <table id="timelineTable">
-      <thead><tr><th>Time</th><th>Event</th><th>Badge</th><th>Status</th></tr></thead>
-      <tbody id="timelineBody"></tbody>
-    </table>
+    <div class="timeline-scroll">
+      <table id="timelineTable">
+        <thead><tr><th>Time</th><th>Event</th><th>Badge</th><th>Status</th></tr></thead>
+        <tbody id="timelineBody"></tbody>
+      </table>
+    </div>
   </div>
 
   <script>
@@ -368,6 +376,15 @@ async function loadMetrics() {{
     if (events) {{
       updateStatus(`Loaded ${{events.length}} events from cache`, 'cached');
     }} else {{
+      // Persist selected date range in URL so refresh keeps it
+      try {{
+        const params = new URLSearchParams(window.location.search);
+        params.set('start', start);
+        params.set('end', end);
+        const newUrl = window.location.pathname + '?' + params.toString();
+        window.history.replaceState(null, '', newUrl);
+      }} catch (e) {{ /* ignore */ }}
+
       // Fetch from API (split into <=365-day chunks if needed)
       events = await fetchMetricsRange(start, end);
       await saveCache(start, end, events);
@@ -585,7 +602,7 @@ function renderDoorLeftOpenTooLong(events) {{
   card.innerHTML = html;
 }}
 
-// Hourly activity heatmap (days x 24 hours)
+// Hourly activity heatmap (days x 24 hours) — full-width card, single continuous scroll (no pagination)
 function renderHourlyHeatmap(events) {{
   const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
   const excludeUnitTest = document.getElementById('chkExcludeUnitTest')?.checked || false;
@@ -602,26 +619,35 @@ function renderHourlyHeatmap(events) {{
   const id = 'hourly-heatmap';
   let card = document.getElementById('card-'+id);
   if (!card) {{
-    card = document.createElement('div'); card.className = 'card'; card.id = 'card-'+id; document.getElementById('chartsGrid').appendChild(card);
+    card = document.createElement('div'); card.className = 'card full-row'; card.id = 'card-'+id; document.getElementById('chartsGrid').appendChild(card);
   }}
-  // Build table
-  let html = `<h2>Hourly Activity Heatmap</h2><table><thead><tr><th>Day</th>`;
+
+  // Build scroll container with full table (no pagination)
+  let html = `<h2>Hourly Activity Heatmap</h2>`;
+  html += `<div class="hourly-heatmap-scroll" id="heat-scroll-${{id}}"><table><thead><tr><th>Day</th>`;
   for (let h=0; h<24; h++) html += `<th>${{h}}</th>`;
-  html += `</tr></thead><tbody>`;
-  let maxCount = 0;
-  days.forEach(d => Object.values(byDayHour[d]).forEach(v => {{ if (v>maxCount) maxCount=v; }}));
+  html += `</tr></thead><tbody id="heat-body-${{id}}"></tbody></table></div>`;
+
+  card.innerHTML = html;
+
+  const maxCount = days.reduce((m, d) => Math.max(m, ...(Object.values(byDayHour[d] || {{}}))), 0);
+  const tbody = document.getElementById(`heat-body-${{id}}`);
+  tbody.innerHTML = '';
   days.forEach(d => {{
-    html += `<tr><td>${{d}}</td>`;
+    let row = `<tr><td>${{d}}</td>`;
     for (let h=0; h<24; h++) {{
       const v = byDayHour[d][h] || 0;
       const intensity = maxCount ? Math.round((v/maxCount)*200) : 0;
       const color = `rgba(78,201,176,${{0.05 + (intensity/255)}})`;
-      html += `<td style="background:${{color}}; text-align:center;">${{v || ''}}</td>`;
+      row += `<td style="background:${{color}}; text-align:center;">${{v || ''}}</td>`;
     }}
-    html += `</tr>`;
+    row += `</tr>`;
+    tbody.innerHTML += row;
   }});
-  html += `</tbody></table>`;
-  card.innerHTML = html;
+
+  // Ensure scroll container scrolls to top
+  const scroller = document.getElementById(`heat-scroll-${{id}}`);
+  if (scroller) scroller.scrollTop = 0;
 }}
 
 // Histogram helper (bins numeric array into N bins)
