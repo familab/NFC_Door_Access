@@ -273,12 +273,111 @@ async function clearCache() {{
   updateStatus('Cache cleared', 'cached');
 }}
 
-// Get cached data
+// Helper: turn IDBRequest into a Promise that resolves with request.result
+function idbRequestToPromise(req) {{
+  return new Promise((resolve, reject) => {{
+    if (req && typeof req.then === 'function') {{
+      // Already a promise (some browsers/polyfills)
+      req.then(resolve).catch(reject);
+      return;
+    }}
+    try {{
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    }} catch (e) {{
+      // Not an IDBRequest; resolve with value directly
+      resolve(req);
+    }}
+  }});
+}}
+
+// Get cached data (exact key)
 async function getCached(start, end) {{
   const key = `${{start}}_${{end}}`;
   const tx = db.transaction([STORE_NAME], 'readonly');
-  const cached = await tx.objectStore(STORE_NAME).get(key);
+  const req = tx.objectStore(STORE_NAME).get(key);
+  const cached = await idbRequestToPromise(req);
   return cached ? cached.events : null;
+}}
+
+// Get all cached segments overlapping [start, end]
+async function getCachedSegments(start, end) {{
+  const tx = db.transaction([STORE_NAME], 'readonly');
+  const req = tx.objectStore(STORE_NAME).getAll();
+  let all = await idbRequestToPromise(req);
+  if (!Array.isArray(all)) all = [];
+  // Filter entries that overlap the requested range (inclusive)
+  return all.filter(e => !(e.end < start || e.start > end));
+}}
+
+// Normalize a stored 'events' value into an array
+function normalizeEventsValue(v) {{
+  if (!v) return [];
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') {{
+    try {{
+      const parsed = JSON.parse(v);
+      if (Array.isArray(parsed)) return parsed;
+    }} catch (e) {{ /* ignore parsing errors */ }}
+    return [];
+  }}
+  if (typeof v === 'object' && Array.isArray(v.events)) return v.events;
+  // Fallback: wrap single object into array
+  return [v];
+}}
+
+// Merge multiple event arrays, sort by ts and remove duplicate events (by ts+event_type+badge_id+status)
+function mergeAndDedupEventLists(lists) {{
+  const normalized = lists.map(normalizeEventsValue);
+  const all = [].concat(...normalized);
+  all.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+  const seen = new Set();
+  const out = [];
+  all.forEach(e => {{
+    const key = `${{e.ts}}|${{e.event_type}}|${{(e.badge_id || '')}}|${{e.status}}`;
+    if (!seen.has(key)) {{
+      seen.add(key);
+      out.push(e);
+    }}
+  }});
+  return out;
+}}
+
+// Compute gaps within [start,end] not covered by provided segments
+function computeMissingRanges(start, end, segments) {{
+  // segments: array of {{start, end}}
+  function toDate(s) {{ return new Date(s + 'T00:00:00'); }}
+  function toISO(d) {{ return d.toISOString().slice(0,10); }}
+
+  const s = toDate(start);
+  const e = toDate(end);
+  if (s > e) return [];
+
+  const ints = segments.map(x => ({{ s: toDate(x.start), e: toDate(x.end) }}))
+    .sort((a,b) => a.s - b.s);
+
+  const gaps = [];
+  let cur = new Date(s);
+
+  for (const it of ints) {{
+    if (it.e < s || it.s > e) continue;
+    const segStart = new Date(Math.max(it.s, s));
+    const segEnd = new Date(Math.min(it.e, e));
+    if (segStart > cur) {{
+      // gap from cur to segStart - 1 day
+      const gapEnd = new Date(segStart);
+      gapEnd.setDate(gapEnd.getDate() - 1);
+      gaps.push({{ start: toISO(cur), end: toISO(gapEnd) }});
+    }}
+    if (segEnd > cur) {{
+      cur = new Date(segEnd);
+      cur.setDate(cur.getDate() + 1);
+    }}
+    if (cur > e) break;
+  }}
+
+  if (cur <= e) gaps.push({{ start: toISO(cur), end: toISO(e) }});
+  return gaps;
 }}
 
 // Save to cache
@@ -370,13 +469,44 @@ async function loadMetrics() {{
   updateStatus('Loading...', 'loading');
 
   try {{
+    debugger
     // Try cache first
     let events = await getCached(start, end);
+    debugger;
+    // Try to use cached segments covering requested range
+    const cachedSegments = await getCachedSegments(start, end);
+    if (cachedSegments && cachedSegments.length) {{
+      // Compute missing ranges
+      const gaps = computeMissingRanges(start, end, cachedSegments);
+      if (!gaps.length) {{
+        // Full coverage — merge cached entries
+        const lists = cachedSegments.map(s => s.events);
+        events = mergeAndDedupEventLists(lists);
+        updateStatus(`Loaded ${{events.length}} events from cache`, 'cached');
+      }} else {{
+        // Persist selected date range in URL so refresh keeps it
+        try {{
+          const params = new URLSearchParams(window.location.search);
+          params.set('start', start);
+          params.set('end', end);
+          const newUrl = window.location.pathname + '?' + params.toString();
+          window.history.replaceState(null, '', newUrl);
+        }} catch (e) {{ /* ignore */ }}
 
-    if (events) {{
-      updateStatus(`Loaded ${{events.length}} events from cache`, 'cached');
+        // Fetch only missing gaps and save each to cache
+        let fetchedLists = [];
+        for (const g of gaps) {{
+          const chunk = await fetchMetricsRange(g.start, g.end);
+          fetchedLists.push(chunk);
+          try {{ await saveCache(g.start, g.end, chunk); }} catch (e) {{ /* ignore */ }}
+        }}
+        // Combine cached + fetched
+        const lists = cachedSegments.map(s => s.events).concat(fetchedLists);
+        events = mergeAndDedupEventLists(lists);
+        updateStatus(`Loaded ${{events.length}} events (cache+server)`, 'loading');
+      }}
     }} else {{
-      // Persist selected date range in URL so refresh keeps it
+      // No cached segments at all — persist URL and fetch full range
       try {{
         const params = new URLSearchParams(window.location.search);
         params.set('start', start);
@@ -385,7 +515,6 @@ async function loadMetrics() {{
         window.history.replaceState(null, '', newUrl);
       }} catch (e) {{ /* ignore */ }}
 
-      // Fetch from API (split into <=365-day chunks if needed)
       events = await fetchMetricsRange(start, end);
       await saveCache(start, end, events);
       updateStatus(`Loaded ${{events.length}} events from server`, 'loading');
