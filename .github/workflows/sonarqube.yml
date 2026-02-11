@@ -8,7 +8,8 @@ concurrency:
 # Required GitHub Secrets:
 # - SONARQUBE_URL: Your SonarQube server URL (e.g., https://sonarcloud.io)
 # - SONAR_TOKEN: Your SonarQube authentication token
-# - SONARQUBE_PROJECT_KEY: Your SonarQube project key (optional, can be set in sonar-project.properties instead)
+# Required GitHub Variables:
+# - SONAR_PROJECT_KEY: Your Sonar project key (optional, can be set in sonar-project.properties instead)
 
 # could run on every push to dev branch
 # current goal is to manually run after verifying the build and tests are working
@@ -25,9 +26,6 @@ on:
   #   branches:
   #     - dev
   workflow_dispatch:
-
-env:
-  SONARQUBE_PROJECT_KEY: familab-badge-scanner
 
 jobs:
   sonarqube:
@@ -138,7 +136,7 @@ jobs:
           SONAR_HOST_URL: ${{ secrets.SONARQUBE_URL }}
         with:
           args: >
-            -Dsonar.projectKey=${{ env.SONARQUBE_PROJECT_KEY }}
+            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
             -Dsonar.projectVersion=${{ steps.extract-version.outputs.VERSION }}
             -Dsonar.sources=.
             -Dsonar.tests=tests
