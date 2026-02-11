@@ -17,55 +17,36 @@ devices:
     name: "PN532 NFC Reader"
     description: "PN532 NFC RFID reader (I2C)."
 
-  - name: "Relay Module"
+  - type: "relay_module"
+    name: "Relay Module"
     description: "5V relay module controlling a 12V load (COM/NO/NC)."
+
+  - name: "Unlock Button"
+    description: "Unlock push button"
+    color: "#228B22"
     pins:
-      - name: "VCC"
-        role: "5V"
-      - name: "GND"
-        role: "GND"
-      - name: "IN"
+      - name: "+"
         role: "GPIO"
-      - name: "COM"
-        role: "5V"
-      - name: "NO"
-        role: "5V"
-      - name: "NC"
-        role: "5V"
+      - name: "-"
+        role: "GND"
 
-  - type: "button"
-    name: "Unlock Button"
-
-  - type: "button"
-    name: "Lock Button"
-
-  - name: "12V Power Supply"
-    description: "External 12V supply for latch and converter."
+  - name: "Lock Button"
+    description: "Lock push button"
+    color: "#FF0000"
     pins:
-      - name: "12V"
-        role: "5V"
-      - name: "GND"
+      - name: "+"
+        role: "GPIO"
+      - name: "-"
         role: "GND"
 
-  - name: "12V to 5V Buck Converter"
-    description: "Buck converter (12V → 5V / 3.3V)."
-    pins:
-      - name: "VIN"
-        role: "5V"
-      - name: "GND_IN"
-        role: "GND"
-      - name: "VOUT"
-        role: "3V3"
-      - name: "GND_OUT"
-        role: "GND"
+  - type: "power_supply"
+    name: "12V Power Supply"
 
-  - name: "12V Door Latch"
-    description: "Door latch/strike (12V)."
-    pins:
-      - name: "POWER"
-        role: "5V"
-      - name: "GND"
-        role: "GND"
+  - type: "buck_converter"
+    name: "12V to 5V Buck Converter"
+
+  - type: "door_latch"
+    name: "12V Door Latch"
 
   - name: "3D Printed Case"
     description: "Mechanical enclosure"
@@ -75,7 +56,7 @@ devices:
 
 connections:
   # PN532 NFC Reader (I2C) - powered from buck converter
-  - from: {device: "12V to 5V Buck Converter", device_pin: "VOUT"}
+  - from: {device: "12V to 5V Buck Converter", device_pin: "VOUT_3V3"}
     to:   {device: "PN532 NFC Reader", device_pin: "VCC"}
 
   - from: {device: "12V to 5V Buck Converter", device_pin: "GND_OUT"}
@@ -101,20 +82,20 @@ connections:
   # Unlock Button (GPIO 27 = physical pin 13)
   - board_pin: 13      # GPIO27
     device: "Unlock Button"
-    device_pin: "SIG"
+    device_pin: "+"
 
   - board_pin: 14      # GND
     device: "Unlock Button"
-    device_pin: "GND"
+    device_pin: "-"
 
   # Lock Button (GPIO 22 = physical pin 15)
   - board_pin: 15      # GPIO22
     device: "Lock Button"
-    device_pin: "SIG"
+    device_pin: "+"
 
   - board_pin: 20      # GND
     device: "Lock Button"
-    device_pin: "GND"
+    device_pin: "-"
 
   # Power and device-to-device connections
   - from: {device: "12V Power Supply", device_pin: "12V"}
@@ -129,7 +110,7 @@ connections:
   - from: {device: "12V Power Supply", device_pin: "12V"}
     to:   {device: "12V to 5V Buck Converter", device_pin: "VIN"}
 
-  - from: {device: "12V to 5V Buck Converter", device_pin: "VOUT"}
+  - from: {device: "12V to 5V Buck Converter", device_pin: "VOUT_3V3"}
     to:   {device: "PN532 NFC Reader", device_pin: "VCC"}
 
   - from: {device: "12V to 5V Buck Converter", device_pin: "GND_OUT"}
