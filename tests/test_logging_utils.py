@@ -5,8 +5,8 @@ import os
 import logging
 from datetime import datetime
 from unittest.mock import patch
-from src_serviceconfig import config
-import src_servicelogging_utils as logging_utils
+from src_service.config import config
+import src_service.logging_utils as logging_utils
 
 
 class TestLoggingUtils(unittest.TestCase):

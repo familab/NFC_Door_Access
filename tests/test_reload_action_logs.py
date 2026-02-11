@@ -1,7 +1,7 @@
 import os
 import sqlite3
 from datetime import datetime
-from src_servicemetrics_storage import reload_action_logs, get_month_db_path
+from src_service.metrics_storage import reload_action_logs, get_month_db_path
 
 
 def test_reload_consumes_action_logs_and_inserts(tmp_path):

@@ -6,7 +6,7 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
-from src_servicemetrics_storage import (
+from src_service.metrics_storage import (
     attach_databases,
     build_union_all_query,
     db_paths_in_range,
@@ -89,7 +89,7 @@ class TestMetricsStorage(unittest.TestCase):
                 self.assertEqual(len(events), 2)
 
     def test_parse_action_message_normalization(self):
-        from src_servicemetrics_storage import parse_action_log_line
+        from src_service.metrics_storage import parse_action_log_line
         cases = [
             ("2026-02-09 12:00:00 - foo - INFO - Badge Scan - Badge: 12345 - Status: OK", "scan", "12345", "ok"),
             ("2026-02-09 12:01:00 - foo - INFO - Door CLOSED - Status: LOCKED", "close", None, "locked"),
@@ -106,14 +106,14 @@ class TestMetricsStorage(unittest.TestCase):
             self.assertEqual(parsed.get("status"), expect_status)
 
     def test_normalize_status_helper(self):
-        from src_servicemetrics_storage import normalize_status
+        from src_service.metrics_storage import normalize_status
         self.assertEqual(normalize_status("OK"), "ok")
         self.assertEqual(normalize_status(" Locked "), "locked")
         self.assertEqual(normalize_status(""), "unknown")
         self.assertEqual(normalize_status(None), "unknown")
 
     def test_normalize_event_type_helper(self):
-        from src_servicemetrics_storage import normalize_event_type
+        from src_service.metrics_storage import normalize_event_type
         cases = [
             ("Badge Scan", "scan"),
             ("Badge: 12345", "scan"),

@@ -2,7 +2,7 @@
 import unittest
 from types import SimpleNamespace
 
-from src_serviceserver.helpers import get_host_header, get_client_addr, get_public_ip
+from src_service.server.helpers import get_host_header, get_client_addr, get_public_ip
 
 
 class TestServerHelpers(unittest.TestCase):

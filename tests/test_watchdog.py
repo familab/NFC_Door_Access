@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch, mock_open
 import time
 import os
 import tempfile
-import src_servicewatchdog as watchdog
+import src_service.watchdog as watchdog
 
 
 class TestWatchdog(unittest.TestCase):

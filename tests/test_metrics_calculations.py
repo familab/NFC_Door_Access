@@ -1,6 +1,6 @@
 """Unit tests for metrics pairing and latency helpers."""
 import unittest
-from lib import metrics_storage as ms
+from src_service import metrics_storage as ms
 
 
 class TestMetricsCalculations(unittest.TestCase):

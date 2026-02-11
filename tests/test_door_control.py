@@ -4,7 +4,7 @@ from unittest.mock import Mock, MagicMock, patch
 import threading
 import time
 from datetime import datetime
-import src_servicedoor_control as door_control
+import src_service.door_control as door_control
 
 # Badge id used in unit tests for logable actions
 UNIT_TEST_BADGE = 'unit_test'

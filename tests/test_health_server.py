@@ -9,9 +9,9 @@ from unittest.mock import Mock, patch, MagicMock
 
 import base64
 
-import src_serviceserver as server
-import src_serviceserver.state as server_state
-from src_serviceserver.server import RequestHandler, _health_server, start_health_server, stop_health_server
+import src_service.server as server
+import src_service.server.state as server_state
+from src_service.server.server import RequestHandler, _health_server, start_health_server, stop_health_server
 
 
 class TestServerStateFunctions(unittest.TestCase):

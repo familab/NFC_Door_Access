@@ -3,7 +3,7 @@ import unittest
 import os
 import json
 import tempfile
-from src_serviceconfig import Config, DEFAULT_CONFIG
+from src_service.config import Config, DEFAULT_CONFIG
 
 
 class TestConfig(unittest.TestCase):
