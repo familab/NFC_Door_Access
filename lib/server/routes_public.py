@@ -15,6 +15,7 @@ from .state import (
     format_timestamp,
     get_local_ips,
     get_uptime,
+    get_uptime_seconds,
     get_disk_space,
     get_pn532_status,
 )
@@ -34,6 +35,7 @@ def send_health_page(handler):
     pn532_success = format_timestamp(pn532_status["last_success"])
     pn532_error = pn532_status["last_error"] or "None"
     uptime = get_uptime()
+    uptime_seconds = get_uptime_seconds()
     disk = get_disk_space()
     try:
         current_log_file = get_current_log_file_path()
@@ -83,7 +85,7 @@ def send_health_page(handler):
             <td class="{'status-warning' if get_door_status() else 'status-ok'}">{door_status}</td>
         </tr>
         <tr><td>Door Status Updated</td><td>{door_updated}</td></tr>
-        <tr><td>Application Uptime</td><td class="status-ok">{uptime}</td></tr>
+        <tr><td>Application Uptime</td><td class="status-ok" id="uptimeDisplay" data-uptime-seconds="{uptime_seconds}">{uptime}</td></tr>
         <tr><td>Last Google Sheets Log</td><td>{last_google_log}</td></tr>
         <tr><td>Last Data Connection</td><td>{last_data_conn}</td></tr>
         <tr><td>Last Badge Download</td><td>{last_badge_dl}</td></tr>
@@ -111,6 +113,29 @@ def send_health_page(handler):
                 if (countdown <= 0) location.reload();
             }}, 1000);
         }}
+    }})();
+
+    // Auto-increment application uptime
+    (function() {{
+        const uptimeEl = document.getElementById('uptimeDisplay');
+        if (!uptimeEl) return;
+        let uptimeSeconds = parseInt(uptimeEl.getAttribute('data-uptime-seconds')) || 0;
+        function formatUptime(totalSecs) {{
+            const days = Math.floor(totalSecs / 86400);
+            const hours = Math.floor((totalSecs % 86400) / 3600);
+            const minutes = Math.floor((totalSecs % 3600) / 60);
+            const seconds = totalSecs % 60;
+            const parts = [];
+            if (days > 0) parts.push(days + 'd');
+            if (hours > 0) parts.push(hours + 'h');
+            if (minutes > 0) parts.push(minutes + 'm');
+            parts.push(seconds + 's');
+            return parts.join(' ');
+        }}
+        setInterval(function() {{
+            uptimeSeconds += 1;
+            uptimeEl.textContent = formatUptime(uptimeSeconds);
+        }}, 1000);
     }})();
     </script>
 </body>

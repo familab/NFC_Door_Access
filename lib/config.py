@@ -20,6 +20,8 @@ DEFAULT_CONFIG = {
     "UNLOCK_DURATION": 3600,  # 1 hour in seconds
     "DOOR_UNLOCK_BADGE_DURATION": 5,  # 5 seconds for badge unlock
     "DEBOUNCE_TIME": 0.5,  # Half a second debounce time
+    "BADGE_REFRESH_RATE_LIMIT_SECONDS": 60,  # Rate limit for manual badge refresh clicks (5 minutes)
+    "DOOR_TOGGLE_RATE_LIMIT_SECONDS": 5,  # Rate limit for door toggle requests (5 seconds)
 
     # File paths
     "CSV_FILE": "google_sheet_data.csv",
@@ -40,7 +42,7 @@ DEFAULT_CONFIG = {
     "HEALTH_REFRESH_INTERVAL": 300,  # 5 minutes
 
     # TLS / HTTPS for health server
-    "HEALTH_SERVER_TLS": True,
+    "HEALTH_SERVER_TLS": False,
     "HEALTH_SERVER_CERT_FILE": "cert.pem",
 
     # Health cache duration: how long (minutes) to keep health metrics cached

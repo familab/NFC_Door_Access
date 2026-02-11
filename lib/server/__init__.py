@@ -11,8 +11,10 @@ from .state import (
     get_pn532_status,
     set_badge_refresh_callback,
     set_door_toggle_callback,
+    update_badge_refresh_attempt_time,
     format_timestamp,
     get_uptime,
+    get_uptime_seconds,
     get_disk_space,
 )
 
@@ -26,7 +28,9 @@ __all__ = [
     "get_pn532_status",
     "set_badge_refresh_callback",
     "set_door_toggle_callback",
+    "update_badge_refresh_attempt_time",
     "format_timestamp",
     "get_uptime",
+    "get_uptime_seconds",
     "get_disk_space",
 ]

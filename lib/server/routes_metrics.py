@@ -148,6 +148,7 @@ def send_metrics_page(handler, raw_query: str):
 <head>
   <meta charset="utf-8">
   <title>Door Metrics</title>
+  <link rel="icon" href="https://images.squarespace-cdn.com/content/v1/65fbda49f5eb7e7df1ae5f87/1711004274233-C9RL74H38DXHYWBDMLSS/favicon.ico?format=100w">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <style>
     body {{ font-family: monospace; margin: 20px; background: #1e1e1e; color: #d4d4d4; }}
@@ -171,6 +172,12 @@ def send_metrics_page(handler, raw_query: str):
     table {{ border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 11px; }}
     th, td {{ border: 1px solid #555; padding: 4px; text-align: left; }}
     th {{ background: #2d2d30; color: #4ec9b0; }}
+    /* Timeline inner scroll */
+    .timeline-scroll {{ max-height: 360px; overflow: auto; }}
+    /* Hourly heatmap should span full width and allow inner scroll/pagination */
+    .card.full-row {{ grid-column: 1 / -1; }}
+    .hourly-heatmap-scroll {{ max-height: 520px; overflow: auto; }}
+    .heatmap-controls {{ margin-bottom: 6px; display:flex; gap:8px; align-items:center; }}
   </style>
 </head>
 <body>
@@ -197,10 +204,12 @@ def send_metrics_page(handler, raw_query: str):
 
   <div class="card">
     <h2>Event Timeline (Latest 100)</h2>
-    <table id="timelineTable">
-      <thead><tr><th>Time</th><th>Event</th><th>Badge</th><th>Status</th></tr></thead>
-      <tbody id="timelineBody"></tbody>
-    </table>
+    <div class="timeline-scroll">
+      <table id="timelineTable">
+        <thead><tr><th>Time</th><th>Event</th><th>Badge</th><th>Status</th></tr></thead>
+        <tbody id="timelineBody"></tbody>
+      </table>
+    </div>
   </div>
 
   <script>
@@ -264,12 +273,111 @@ async function clearCache() {{
   updateStatus('Cache cleared', 'cached');
 }}
 
-// Get cached data
+// Helper: turn IDBRequest into a Promise that resolves with request.result
+function idbRequestToPromise(req) {{
+  return new Promise((resolve, reject) => {{
+    if (req && typeof req.then === 'function') {{
+      // Already a promise (some browsers/polyfills)
+      req.then(resolve).catch(reject);
+      return;
+    }}
+    try {{
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    }} catch (e) {{
+      // Not an IDBRequest; resolve with value directly
+      resolve(req);
+    }}
+  }});
+}}
+
+// Get cached data (exact key)
 async function getCached(start, end) {{
   const key = `${{start}}_${{end}}`;
   const tx = db.transaction([STORE_NAME], 'readonly');
-  const cached = await tx.objectStore(STORE_NAME).get(key);
+  const req = tx.objectStore(STORE_NAME).get(key);
+  const cached = await idbRequestToPromise(req);
   return cached ? cached.events : null;
+}}
+
+// Get all cached segments overlapping [start, end]
+async function getCachedSegments(start, end) {{
+  const tx = db.transaction([STORE_NAME], 'readonly');
+  const req = tx.objectStore(STORE_NAME).getAll();
+  let all = await idbRequestToPromise(req);
+  if (!Array.isArray(all)) all = [];
+  // Filter entries that overlap the requested range (inclusive)
+  return all.filter(e => !(e.end < start || e.start > end));
+}}
+
+// Normalize a stored 'events' value into an array
+function normalizeEventsValue(v) {{
+  if (!v) return [];
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') {{
+    try {{
+      const parsed = JSON.parse(v);
+      if (Array.isArray(parsed)) return parsed;
+    }} catch (e) {{ /* ignore parsing errors */ }}
+    return [];
+  }}
+  if (typeof v === 'object' && Array.isArray(v.events)) return v.events;
+  // Fallback: wrap single object into array
+  return [v];
+}}
+
+// Merge multiple event arrays, sort by ts and remove duplicate events (by ts+event_type+badge_id+status)
+function mergeAndDedupEventLists(lists) {{
+  const normalized = lists.map(normalizeEventsValue);
+  const all = [].concat(...normalized);
+  all.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+  const seen = new Set();
+  const out = [];
+  all.forEach(e => {{
+    const key = `${{e.ts}}|${{e.event_type}}|${{(e.badge_id || '')}}|${{e.status}}`;
+    if (!seen.has(key)) {{
+      seen.add(key);
+      out.push(e);
+    }}
+  }});
+  return out;
+}}
+
+// Compute gaps within [start,end] not covered by provided segments
+function computeMissingRanges(start, end, segments) {{
+  // segments: array of {{start, end}}
+  function toDate(s) {{ return new Date(s + 'T00:00:00'); }}
+  function toISO(d) {{ return d.toISOString().slice(0,10); }}
+
+  const s = toDate(start);
+  const e = toDate(end);
+  if (s > e) return [];
+
+  const ints = segments.map(x => ({{ s: toDate(x.start), e: toDate(x.end) }}))
+    .sort((a,b) => a.s - b.s);
+
+  const gaps = [];
+  let cur = new Date(s);
+
+  for (const it of ints) {{
+    if (it.e < s || it.s > e) continue;
+    const segStart = new Date(Math.max(it.s, s));
+    const segEnd = new Date(Math.min(it.e, e));
+    if (segStart > cur) {{
+      // gap from cur to segStart - 1 day
+      const gapEnd = new Date(segStart);
+      gapEnd.setDate(gapEnd.getDate() - 1);
+      gaps.push({{ start: toISO(cur), end: toISO(gapEnd) }});
+    }}
+    if (segEnd > cur) {{
+      cur = new Date(segEnd);
+      cur.setDate(cur.getDate() + 1);
+    }}
+    if (cur > e) break;
+  }}
+
+  if (cur <= e) gaps.push({{ start: toISO(cur), end: toISO(e) }});
+  return gaps;
 }}
 
 // Save to cache
@@ -314,6 +422,40 @@ async function fetchMetrics(start, end) {{
   return allEvents;
 }}
 
+// Fetch for a potentially large date range by splitting into <=365-day chunks
+async function fetchMetricsRange(start, end) {{
+  const maxDays = 365;
+  const s = new Date(start + 'T00:00:00');
+  const e = new Date(end + 'T00:00:00');
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const diffDays = Math.ceil((e - s) / msPerDay) + 1; // inclusive
+
+  if (diffDays <= maxDays) {{
+    return await fetchMetrics(start, end);
+  }}
+
+  const parts = [];
+  let curStart = new Date(s);
+  while (curStart <= e) {{
+    const curEnd = new Date(Math.min(e.getTime(), curStart.getTime() + (maxDays - 1) * msPerDay));
+    const partStart = curStart.toISOString().slice(0, 10);
+    const partEnd = curEnd.toISOString().slice(0, 10);
+    parts.push({{ start: partStart, end: partEnd }});
+    curStart = new Date(curEnd.getTime() + msPerDay);
+  }}
+
+  // Make requests sequentially and concatenate results
+  let combined = [];
+  for (const p of parts) {{
+    const chunk = await fetchMetrics(p.start, p.end);
+    combined = combined.concat(chunk);
+  }}
+
+  // Ensure globally sorted by ts
+  combined.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+  return combined;
+}}
+
 // Load metrics (cache-first)
 async function loadMetrics() {{
   const start = document.getElementById('startDate').value;
@@ -327,14 +469,53 @@ async function loadMetrics() {{
   updateStatus('Loading...', 'loading');
 
   try {{
+    debugger
     // Try cache first
     let events = await getCached(start, end);
+    debugger;
+    // Try to use cached segments covering requested range
+    const cachedSegments = await getCachedSegments(start, end);
+    if (cachedSegments && cachedSegments.length) {{
+      // Compute missing ranges
+      const gaps = computeMissingRanges(start, end, cachedSegments);
+      if (!gaps.length) {{
+        // Full coverage — merge cached entries
+        const lists = cachedSegments.map(s => s.events);
+        events = mergeAndDedupEventLists(lists);
+        updateStatus(`Loaded ${{events.length}} events from cache`, 'cached');
+      }} else {{
+        // Persist selected date range in URL so refresh keeps it
+        try {{
+          const params = new URLSearchParams(window.location.search);
+          params.set('start', start);
+          params.set('end', end);
+          const newUrl = window.location.pathname + '?' + params.toString();
+          window.history.replaceState(null, '', newUrl);
+        }} catch (e) {{ /* ignore */ }}
 
-    if (events) {{
-      updateStatus(`Loaded ${{events.length}} events from cache`, 'cached');
+        // Fetch only missing gaps and save each to cache
+        let fetchedLists = [];
+        for (const g of gaps) {{
+          const chunk = await fetchMetricsRange(g.start, g.end);
+          fetchedLists.push(chunk);
+          try {{ await saveCache(g.start, g.end, chunk); }} catch (e) {{ /* ignore */ }}
+        }}
+        // Combine cached + fetched
+        const lists = cachedSegments.map(s => s.events).concat(fetchedLists);
+        events = mergeAndDedupEventLists(lists);
+        updateStatus(`Loaded ${{events.length}} events (cache+server)`, 'loading');
+      }}
     }} else {{
-      // Fetch from API
-      events = await fetchMetrics(start, end);
+      // No cached segments at all — persist URL and fetch full range
+      try {{
+        const params = new URLSearchParams(window.location.search);
+        params.set('start', start);
+        params.set('end', end);
+        const newUrl = window.location.pathname + '?' + params.toString();
+        window.history.replaceState(null, '', newUrl);
+      }} catch (e) {{ /* ignore */ }}
+
+      events = await fetchMetricsRange(start, end);
       await saveCache(start, end, events);
       updateStatus(`Loaded ${{events.length}} events from server`, 'loading');
     }}
@@ -550,7 +731,7 @@ function renderDoorLeftOpenTooLong(events) {{
   card.innerHTML = html;
 }}
 
-// Hourly activity heatmap (days x 24 hours)
+// Hourly activity heatmap (days x 24 hours) — full-width card, single continuous scroll (no pagination)
 function renderHourlyHeatmap(events) {{
   const includeNoBadge = document.getElementById('chkIncludeNoBadge')?.checked || false;
   const excludeUnitTest = document.getElementById('chkExcludeUnitTest')?.checked || false;
@@ -567,26 +748,35 @@ function renderHourlyHeatmap(events) {{
   const id = 'hourly-heatmap';
   let card = document.getElementById('card-'+id);
   if (!card) {{
-    card = document.createElement('div'); card.className = 'card'; card.id = 'card-'+id; document.getElementById('chartsGrid').appendChild(card);
+    card = document.createElement('div'); card.className = 'card full-row'; card.id = 'card-'+id; document.getElementById('chartsGrid').appendChild(card);
   }}
-  // Build table
-  let html = `<h2>Hourly Activity Heatmap</h2><table><thead><tr><th>Day</th>`;
+
+  // Build scroll container with full table (no pagination)
+  let html = `<h2>Hourly Activity Heatmap</h2>`;
+  html += `<div class="hourly-heatmap-scroll" id="heat-scroll-${{id}}"><table><thead><tr><th>Day</th>`;
   for (let h=0; h<24; h++) html += `<th>${{h}}</th>`;
-  html += `</tr></thead><tbody>`;
-  let maxCount = 0;
-  days.forEach(d => Object.values(byDayHour[d]).forEach(v => {{ if (v>maxCount) maxCount=v; }}));
+  html += `</tr></thead><tbody id="heat-body-${{id}}"></tbody></table></div>`;
+
+  card.innerHTML = html;
+
+  const maxCount = days.reduce((m, d) => Math.max(m, ...(Object.values(byDayHour[d] || {{}}))), 0);
+  const tbody = document.getElementById(`heat-body-${{id}}`);
+  tbody.innerHTML = '';
   days.forEach(d => {{
-    html += `<tr><td>${{d}}</td>`;
+    let row = `<tr><td>${{d}}</td>`;
     for (let h=0; h<24; h++) {{
       const v = byDayHour[d][h] || 0;
       const intensity = maxCount ? Math.round((v/maxCount)*200) : 0;
       const color = `rgba(78,201,176,${{0.05 + (intensity/255)}})`;
-      html += `<td style="background:${{color}}; text-align:center;">${{v || ''}}</td>`;
+      row += `<td style="background:${{color}}; text-align:center;">${{v || ''}}</td>`;
     }}
-    html += `</tr>`;
+    row += `</tr>`;
+    tbody.innerHTML += row;
   }});
-  html += `</tbody></table>`;
-  card.innerHTML = html;
+
+  // Ensure scroll container scrolls to top
+  const scroller = document.getElementById(`heat-scroll-${{id}}`);
+  if (scroller) scroller.scrollTop = 0;
 }}
 
 // Histogram helper (bins numeric array into N bins)

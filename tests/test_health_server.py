@@ -225,31 +225,31 @@ class TestRequestHandler(unittest.TestCase):
         import threading
         import lib.server.routes_public as rp
 
-hs = server.HealthServer(port=0, tls=True)
-            hs.start()
-            try:
-                # Wait for server to be created
-                timeout = time.time() + 5
-                while (hs.server is None or getattr(hs.server, 'server_address', None) is None) and time.time() < timeout:
-                    time.sleep(0.01)
-                if hs.server is None:
-                    self.fail("Health server did not start")
-                port = hs.server.server_address[1]
+        hs = server.HealthServer(port=0, tls=True)
+        hs.start()
+        try:
+            # Wait for server to be created
+            timeout = time.time() + 5
+            while (hs.server is None or getattr(hs.server, 'server_address', None) is None) and time.time() < timeout:
+                time.sleep(0.01)
+            if hs.server is None:
+                self.fail("Health server did not start")
+            port = hs.server.server_address[1]
 
-                # Replace send_health_page with a slower version to simulate blocking work
-                orig = rp.send_health_page
+            # Replace send_health_page with a slower version to simulate blocking work
+            orig = rp.send_health_page
 
-                def slow_send(handler):
-                    time.sleep(0.5)
-                    return orig(handler)
+            def slow_send(handler):
+                time.sleep(0.5)
+                return orig(handler)
 
-                results = []
+            results = []
 
-                def do_request():
-                    url = f'https://127.0.0.1:{port}/health'
-                    try:
-                        ctx = ssl._create_unverified_context()
-                        with urllib.request.urlopen(url, timeout=5, context=ctx) as r:
+            def do_request():
+                url = f'https://127.0.0.1:{port}/health'
+                try:
+                    ctx = ssl._create_unverified_context()
+                    with urllib.request.urlopen(url, timeout=5, context=ctx) as r:
                         results.append(r.read())
                 except Exception as e:
                     results.append(e)

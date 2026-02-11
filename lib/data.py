@@ -82,19 +82,23 @@ class GoogleSheetsData:
     def refresh_badge_list_to_csv(self, csv_file: str) -> Tuple[bool, str]:
         """Refresh badge list and persist to CSV."""
         if not self.is_connected():
+            msg = "No Google Sheets connection"
             get_logger().warning("Badge refresh requested but Google Sheets not connected")
+            update_last_google_error(msg)
             update_last_badge_download(success=False)
-            return False, "No Google Sheets connection"
+            return False, msg
 
         try:
             uids = self.get_badge_uids(normalize_lower=False)
 
             if len(uids) < 5:
+                msg = f"Only {len(uids)} badges (minimum 5 required)"
                 get_logger().warning(
                     f"Badge refresh rejected: only {len(uids)} entries (minimum 5 required)"
                 )
+                update_last_google_error(msg)
                 update_last_badge_download(success=False)
-                return False, f"Only {len(uids)} badges"
+                return False, msg
 
             try:
                 directory = os.path.dirname(csv_file) or "."
@@ -108,7 +112,9 @@ class GoogleSheetsData:
 
                 os.replace(temp_path, csv_file)
             except Exception as e:
-                get_logger().warning(f"Failed to write local CSV fallback: {e}")
+                msg = f"Failed to write CSV: {e}"
+                get_logger().warning(msg)
+                update_last_google_error(msg)
                 update_last_badge_download(success=False)
                 try:
                     if "temp_path" in locals() and os.path.exists(temp_path):
@@ -118,11 +124,15 @@ class GoogleSheetsData:
                 return False, "Failed to write CSV"
 
             get_logger().info(f"Badge list refreshed: {len(uids)} entries")
+            # Clear error on success
+            update_last_google_error(None)
             return True, f"{len(uids)} badges"
         except Exception as e:
+            msg = str(e)
             get_logger().exception("Badge refresh failed")
+            update_last_google_error(msg)
             update_last_badge_download(success=False)
-            return False, str(e)
+            return False, msg
 
     def check_uid_in_sheet(self, uid_hex: str) -> bool:
         """Check if a UID exists in the badge sheet."""

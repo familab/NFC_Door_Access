@@ -339,28 +339,37 @@ def query_events_range(
     if not db_paths:
         return []
 
-    conn = sqlite3.connect(":memory:")
-    try:
-        aliases = attach_databases(conn, db_paths)
-        where = "WHERE ts >= ? AND ts <= ?"
-        params: List[str] = []
-        if event_types:
-            placeholders = ",".join(["?"] * len(event_types))
-            where += " AND event_type IN ({0})".format(placeholders)
+    # Query each monthly DB individually to avoid hitting SQLite attached database limits.
+    rows: List[Tuple[str, str, Optional[str], str, str]] = []
+    for db_path in db_paths:
+        try:
+            c = sqlite3.connect(db_path)
+            try:
+                where = "WHERE ts >= ? AND ts <= ?"
+                params: List[str] = [start_ts, end_ts]
+                if event_types:
+                    placeholders = ",".join(["?"] * len(event_types))
+                    where += " AND event_type IN ({0})".format(placeholders)
+                    params.extend(event_types)
+                sql = (
+                    "SELECT ts, event_type, badge_id, status, raw_message "
+                    f"FROM events {where}"
+                )
+                fetched = c.execute(sql, tuple(params)).fetchall()
+                if fetched:
+                    rows.extend(fetched)
+            finally:
+                c.close()
+        except Exception:
+            # If a single DB fails to open or query, log and continue with others
+            try:
+                get_logger().warning(f"Failed to query metrics DB {db_path}")
+            except Exception:
+                pass
 
-        union_sql = build_union_all_query(aliases, where_clause=where)
-        sql = "SELECT ts, event_type, badge_id, status, raw_message FROM ({0}) ORDER BY ts ASC".format(
-            union_sql
-        )
-        for _alias in aliases:
-            params.extend([start_ts, end_ts])
-            if event_types:
-                params.extend(event_types)
-
-        rows = conn.execute(sql, tuple(params)).fetchall()
-        return [_event_row(row) for row in rows]
-    finally:
-        conn.close()
+    # Sort globally by timestamp (ISO datetime strings sort lexicographically)
+    rows.sort(key=lambda r: r[0])
+    return [_event_row(row) for row in rows]
 
 
 def query_month_events(month_key: str) -> List[Dict[str, Optional[str]]]:
