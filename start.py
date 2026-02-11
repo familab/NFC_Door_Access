@@ -55,6 +55,7 @@ from lib.server import (
     update_pn532_error,
     set_badge_refresh_callback,
     set_door_toggle_callback,
+    update_badge_refresh_attempt_time,
 )
 from lib.watchdog import start_watchdog, stop_watchdog
 
@@ -136,6 +137,9 @@ def _schedule_daily_badge_refresh(stop_event: threading.Event):
                 logger.warning(f"Scheduled badge refresh failed: {message}")
         except Exception as e:
             logger.warning(f"Scheduled badge refresh error: {e}")
+        finally:
+            # Update attempt time (success or failure) so timer advances in memory
+            update_badge_refresh_attempt_time()
 
         # Wait for next interval or stop
         stop_event.wait(interval)

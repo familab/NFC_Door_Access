@@ -22,13 +22,18 @@ _pn532_lock = threading.Lock()
 _badge_refresh_fn = None
 _door_toggle_fn = None
 
+# Badge refresh timing: Track last scheduled refresh attempt (not rate-limited click)
+# Used to advance timer even if refresh fails (success or failure, mtime doesn't change)
+_last_badge_refresh_attempt_time = 0.0  # seconds since epoch
+_badge_refresh_attempt_lock = threading.Lock()
+
 # Rate limit: last time each action was allowed (seconds since epoch)
 _last_badge_refresh_time = 0.0
 _last_state_refresh_time = 0.0
 _last_metrics_reload_time = 0.0
 _last_door_toggle_time = 0.0
-_rate_limit_seconds = 300  # 5 minutes
-_door_toggle_rate_limit_seconds = 5  # 5 seconds
+_rate_limit_seconds = int(config.get("BADGE_REFRESH_RATE_LIMIT_SECONDS", 300) or 300)
+_door_toggle_rate_limit_seconds = int(config.get("DOOR_TOGGLE_RATE_LIMIT_SECONDS", 5) or 5)
 _rate_limit_lock = threading.Lock()
 
 # Health caching (cached for a configurable number of minutes)
@@ -80,6 +85,25 @@ def set_door_toggle_callback(fn):
 def get_door_toggle_callback():
     """Return the registered door toggle callback or None."""
     return _door_toggle_fn
+
+
+def update_badge_refresh_attempt_time():
+    """Record that a badge refresh was attempted (success or failure).
+
+    Used to advance the timer even if refresh fails. Call this after each
+    refresh attempt in the scheduled refresh loop.
+    """
+    import time as _time
+    global _last_badge_refresh_attempt_time
+    with _badge_refresh_attempt_lock:
+        _last_badge_refresh_attempt_time = _time.time()
+
+
+def get_last_badge_refresh_attempt_time() -> float:
+    """Get the timestamp of the last badge refresh attempt (success or failure)."""
+    global _last_badge_refresh_attempt_time
+    with _badge_refresh_attempt_lock:
+        return _last_badge_refresh_attempt_time
 
 
 def check_rate_limit_badge_refresh() -> tuple[bool, str]:
@@ -213,6 +237,12 @@ def get_uptime() -> str:
     return " ".join(parts)
 
 
+def get_uptime_seconds() -> int:
+    """Application uptime as total seconds (for JavaScript auto-increment)."""
+    uptime = datetime.now() - _app_start_time
+    return int(uptime.total_seconds())
+
+
 def get_disk_space() -> dict:
     """Disk space info (free_mb, total_mb, used_mb, percent_used).
 
@@ -270,17 +300,28 @@ def read_log_full(path: str) -> str:
 
 
 def get_seconds_until_next_badge_refresh() -> int:
-    """Return seconds until next scheduled badge refresh based on CSV mtime.
+    """Return seconds until next scheduled badge refresh.
 
-    Uses `BADGE_REFRESH_INTERVAL_SECONDS` and the CSV file modification time to
-    calculate how long until the next scheduled refresh should run.
-    Returns 0 if refresh should run immediately (no CSV present or interval elapsed).
+    Priority order:
+    1. Use last refresh attempt time (success or failure) to ensure timer advances even on failure
+    2. Fall back to CSV file modification time if no attempt recorded yet
+    3. Return 0 if no reference point exists (refresh should run immediately)
+
+    Uses `BADGE_REFRESH_INTERVAL_SECONDS` to calculate the interval.
     """
     import time as _time
     interval = int(config.get("BADGE_REFRESH_INTERVAL_SECONDS", 24 * 60 * 60) or 0)
     if interval <= 0:
         return 0
 
+    # Prefer last refresh attempt time (updates even on failure)
+    attempt_time = get_last_badge_refresh_attempt_time()
+    if attempt_time > 0:
+        elapsed = max(0, _time.time() - attempt_time)
+        wait = int(max(0, interval - elapsed))
+        return wait
+
+    # Fall back to CSV file mtime if no attempt recorded yet
     csv_path = config.get("CSV_FILE")
     try:
         if csv_path and os.path.exists(csv_path):
@@ -292,7 +333,7 @@ def get_seconds_until_next_badge_refresh() -> int:
         # If anything goes wrong just allow immediate refresh
         return 0
 
-    # No CSV file -> should refresh immediately
+    # No reference point -> should refresh immediately
     return 0
 
 

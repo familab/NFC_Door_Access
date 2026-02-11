@@ -225,8 +225,8 @@ def record_action(action: str, badge_id: Optional[str] = None, status: str = "Su
         log.exception("Failed to log to action logger")
 
 
-def update_last_google_error(message: str):
-    """Update the last Google Sheets error message."""
+def update_last_google_error(message: Optional[str]):
+    """Update the last Google Sheets error message. Pass None to clear."""
     global last_google_error
     with timestamp_lock:
         last_google_error = message
