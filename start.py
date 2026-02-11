@@ -23,7 +23,7 @@ except Exception:
     except Exception:
         # Local stub as final fallback
         import importlib
-        GPIO = importlib.import_module('lib.gpio_stub')
+        GPIO = importlib.import_module('src_service.gpio_stub')
         print("Warning: RPi.GPIO not found; using GPIO stub for development.")
 import time
 import threading
