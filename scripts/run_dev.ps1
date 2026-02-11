@@ -39,7 +39,7 @@ if ($Install) {
         }
     }
     if (-not $installed) {
-        Write-Host "No emulator package installed. The project includes local stubs (lib/gpio_stub.py and lib/pn532_stub.py) that will be used automatically." -ForegroundColor Yellow
+        Write-Host "No emulator package installed. The project includes local stubs (src_service/gpio_stub.py and src_service/pn532_stub.py) that will be used automatically." -ForegroundColor Yellow
         Write-Host "If you want an emulator, consider installing one of: fake-rpi, fake_rpi, or an alternative that provides the RPi.GPIO API." -ForegroundColor Yellow
     }
 

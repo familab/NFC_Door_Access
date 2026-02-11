@@ -15,13 +15,13 @@ if (Test-Path "version-*.txt") {
 
 Write-Host "Using version: $VERSION"
 
-Write-Host "Updating lib/version.py with version: $VERSION"
-# Update lib/version.py
+Write-Host "Updating src_service/version.py with version: $VERSION"
+# Update src_service/version.py
 $versionContent = @"
 """Version information for the door controller."""
 
 __version__ = "$VERSION"
 "@
 
-Set-Content -Path "lib/version.py" -Value $versionContent -NoNewline
+Set-Content -Path "src_service/version.py" -Value $versionContent -NoNewline
 Write-Host "Version updated successfully to $VERSION"

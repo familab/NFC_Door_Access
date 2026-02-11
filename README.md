@@ -167,7 +167,7 @@ You can run the application locally on Windows for development without GPIO/PN53
 
 Recommended (optional): install a GPIO emulator package so code that imports `RPi.GPIO` still works.
 
-Note: there is no single canonical emulator package on PyPI — names vary. The project includes local stubs (`lib/gpio_stub.py` and `lib/pn532_stub.py`) which are used automatically when real hardware packages are missing.
+Note: there is no single canonical emulator package on PyPI — names vary. The project includes local stubs (`src_service/gpio_stub.py` and `src_service/pn532_stub.py`) which are used automatically when real hardware packages are missing.
 
 If you want to try an emulator, these are common candidates (may or may not exist on PyPI):
 
@@ -383,7 +383,7 @@ Protection and approvals:
 
 Behavior of the deployment workflow:
 
-- Job 1 (`build_package`) creates a ZIP containing `README.md`, all `*.md` files, `*.service` files, `version*.txt`, `main.py`, the `lib/` package, and `requirements.txt`.
+- Job 1 (`build_package`) creates a ZIP containing `README.md`, all `*.md` files, `*.service` files, `version*.txt`, `main.py`, the `src_service/` package, and `requirements.txt`.
 - Job 2 (`deploy`) runs on a **self-hosted** runner (an agent you own), downloads the ZIP, extracts it to `DEPLOY_DIR` (default `/opt/door`), writes the `creds.json` file if `CREDS_JSON` is provided, creates a systemd drop-in to export `DOOR_CREDS_FILE`, `DOOR_HEALTH_USERNAME`, and `DOOR_HEALTH_PASSWORD` into the service environment, then restarts `door-app.service`.
 
 Notes & recommended follow-ups:

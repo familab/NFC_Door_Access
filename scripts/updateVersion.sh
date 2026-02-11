@@ -20,9 +20,9 @@ fi
 # Fallback
 VERSION=${VERSION:-"0.0.2-fallback"}
 
-echo "Updating lib/version.py with version: $VERSION"
-# Update lib/version.py
-cat > lib/version.py <<EOF
+echo "Updating src_service/version.py with version: $VERSION"
+# Update src_service/version.py
+cat > src_service/version.py <<EOF
 """Version information for the door controller."""
 
 __version__ = "$VERSION"
