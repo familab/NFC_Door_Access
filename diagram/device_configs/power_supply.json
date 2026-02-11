@@ -1,0 +1,10 @@
+{
+  "id": "power_supply",
+  "name": "12V Power Supply",
+  "description": "External 12V power supply for the latch and converter.",
+  "category": "generic",
+  "pins": [
+    { "name": "12V", "role": "5V" },
+    { "name": "GND", "role": "GND" }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "buck_converter",
+  "name": "12V to 5V Buck Converter",
+  "description": "Step-down converter providing 5V and 3.3V outputs.",
+  "category": "generic",
+  "pins": [
+    { "name": "VIN", "role": "5V" },
+    { "name": "GND_IN", "role": "GND" },
+    { "name": "VOUT_5V", "role": "5V" },
+    { "name": "VOUT_3V3", "role": "3V3" },
+    { "name": "GND_OUT", "role": "GND" }
+  ]
+}

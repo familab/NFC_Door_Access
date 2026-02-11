@@ -1,0 +1,10 @@
+{
+  "id": "door_latch",
+  "name": "12V Door Latch",
+  "description": "Door latch/strike (12V), powered via relay.",
+  "category": "actuators",
+  "pins": [
+    { "name": "POWER", "role": "5V" },
+    { "name": "GND", "role": "GND" }
+  ]
+}

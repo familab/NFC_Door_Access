@@ -1,0 +1,14 @@
+{
+  "id": "relay_module",
+  "name": "Relay Module",
+  "description": "General-purpose relay module with control input and relay contacts.",
+  "category": "actuators",
+  "pins": [
+    { "name": "VCC", "role": "5V" },
+    { "name": "GND", "role": "GND" },
+    { "name": "IN", "role": "GPIO" },
+    { "name": "COM", "role": "5V" },
+    { "name": "NO", "role": "5V" },
+    { "name": "NC", "role": "5V" }
+  ]
+}
