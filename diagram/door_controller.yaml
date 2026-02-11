@@ -1,4 +1,5 @@
 title: "FamiLAB Door Controller - Raspberry Pi Zero W Wiring"
+# Pi Zero W shares the same 40-pin GPIO header as Pi 4; pinviz has no Pi Zero template
 board: "raspberry_pi_4"
 
 devices:
