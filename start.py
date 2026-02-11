@@ -40,15 +40,15 @@ except Exception:
     # PN532 hardware libs not available; we will use a stub at initialization time
 
 # Import new modules
-from lib.config import config
-from lib.logging_utils import (
+from src_service.config import config
+from src_service.logging_utils import (
     logger,
     record_action,
     log_pn532_error
 )
-from lib.data import GoogleSheetsData
-from lib.door_control import DoorController, set_door_status, get_door_status
-from lib.server import (
+from src_service.data import GoogleSheetsData
+from src_service.door_control import DoorController, set_door_status, get_door_status
+from src_service.server import (
     start_health_server,
     stop_health_server,
     update_pn532_success,
@@ -57,7 +57,7 @@ from lib.server import (
     set_door_toggle_callback,
     update_badge_refresh_attempt_time,
 )
-from lib.watchdog import start_watchdog, stop_watchdog
+from src_service.watchdog import start_watchdog, stop_watchdog
 
 # GPIO Pin Definitions (from config)
 RELAY_PIN = config["RELAY_PIN"]
@@ -70,7 +70,7 @@ UNLOCK_DURATION = config["UNLOCK_DURATION"]
 # Local CSV backup file
 CSV_FILE = config["CSV_FILE"]
 
-# Global `logger` is initialized in lib.logging_utils at import time
+# Global `logger` is initialized in src_service.logging_utils at import time
 # Use the module-level `logger` imported above
 
 # Log which backends are active for easier debugging in dev
@@ -178,7 +178,7 @@ try:
     logger.info("PN532 RFID reader initialized")
 except Exception as e:
     logger.warning(f"Failed to initialize PN532: {e}. Using PN532 stub for development.")
-    from lib.pn532_stub import PN532Stub
+    from src_service.pn532_stub import PN532Stub
     pn532 = PN532Stub()
 
 # Initialize door controller
@@ -390,7 +390,7 @@ def main():
         logger.info("All systems operational")
         # Detect whether the health server is actually using TLS (https) and log the correct URL
         try:
-            import lib.server.server as server_module
+            import src_service.server.server as server_module
             hs = server_module._health_server
             timeout = time.time() + 2
             while hs and getattr(hs, "server", None) is None and time.time() < timeout:

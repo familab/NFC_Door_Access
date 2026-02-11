@@ -1,5 +1,7 @@
 # Metrics and Door Toggle API
 
+[← Back to README](../README.md)
+
 This project includes authenticated admin controls and a metrics dashboard:
 
 - `POST /api/toggle` toggles the current lock state using the existing manual lock/unlock callbacks.

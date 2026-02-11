@@ -1,5 +1,7 @@
 # Google Sheets Data Schema
 
+[← Back to README](../README.md)
+
 ## Table of Contents
 - [Overview](#overview)
 - [Badge List - Access Control](#badge-list---access-control-sheet-name-exactly-badge-list---access-control)

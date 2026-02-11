@@ -1,5 +1,7 @@
 # Door Controller - Quick Reference Guide
 
+[← Back to README](../README.md)
+
 ## Table of Contents
 - [Quick Start](#quick-start)
   - [Initial Setup](#1-initial-setup)

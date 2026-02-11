@@ -24,6 +24,13 @@ Main Functions:
 Credentials:
 - The google doc is shared with a service account and credentials are saved to a local file. See https://docs.gspread.org/en/latest/oauth2.html for more information about how gspread works.
 
+## Pages
+- [Quick Reference](docs/quick_reference.md)
+- [Optimizations](docs/optimizations.md)
+- [Data Schema](docs/data-schema.md)
+- [Metrics](docs/metrics.md)
+
+
 ## Table of Contents
 - [Features](#features)
 - [Hardware Requirements](#hardware-requirements)

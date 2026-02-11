@@ -85,8 +85,8 @@ jobs:
       - name: Create deploy zip
         run: |
           mkdir -p build
-          # Include README, markdown files, service files, version txt, main.py, lib, requirements.txt
-          zip -r build/deploy.zip README.md *.md *.service version*.txt main.py lib requirements.txt || true
+          # Include README, markdown files, service files, version txt, main.py, src_service, requirements.txt
+          zip -r build/deploy.zip README.md *.md *.service version*.txt main.py src_service requirements.txt || true
           ls -l build
 
       - name: Upload deploy artifact

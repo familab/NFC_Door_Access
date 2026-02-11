@@ -1,5 +1,7 @@
 # Optimizations
 
+[← Back to README](../README.md)
+
 ## Table of Contents
 - [Disable Wi‑Fi Power Saving on Raspberry Pi Zero W](#disable-wi‑fi-power-saving-on-raspberry-pi-zero-w)
   - [Check current power‑saving status](#check-current-power‑saving-status)
