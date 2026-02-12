@@ -118,21 +118,26 @@ class TestRequestHandler(unittest.TestCase):
         self.mock_request = Mock()
         self.mock_client_address = ("127.0.0.1", 12345)
         self.mock_server = Mock()
-        self.config_patcher = patch(
-            "src_service.server.server.config",
-            {
-                "HEALTH_SERVER_USERNAME": "testuser",
-                "HEALTH_SERVER_PASSWORD": "testpass",
-                "LOG_FILE": "/tmp/test.log",
-            },
-        )
+        test_config = {
+            "HEALTH_SERVER_USERNAME": "testuser",
+            "HEALTH_SERVER_PASSWORD": "testpass",
+            "LOG_FILE": "/tmp/test.log",
+            "GOOGLE_OAUTH_ENABLED": True,
+        }
+        self.config_patcher = patch("src_service.server.server.config", test_config)
+        self.auth_config_patcher = patch("src_service.server.auth.config", test_config)
+        self.routes_auth_config_patcher = patch("src_service.server.routes_auth.config", test_config)
         self.config_patcher.start()
+        self.auth_config_patcher.start()
+        self.routes_auth_config_patcher.start()
         self.logger_patcher = patch("src_service.server.server.get_logger")
         self.mock_logger = self.logger_patcher.start()
         self.mock_logger.return_value = Mock()
 
     def tearDown(self):
         self.config_patcher.stop()
+        self.auth_config_patcher.stop()
+        self.routes_auth_config_patcher.stop()
         self.logger_patcher.stop()
 
     def _create_handler(self, path="/", auth_header=None, method="GET"):
@@ -271,18 +276,20 @@ class TestRequestHandler(unittest.TestCase):
             hs.stop()
 
     def test_admin_requires_auth(self):
-        """GET /admin without auth returns 401."""
+        """GET /admin without auth redirects to /login."""
         handler = self._create_handler(path="/admin")
         handler.do_GET()
         body = handler.wfile.getvalue()
-        self.assertIn(b"401", body)
+        self.assertIn(b"302", body)
+        self.assertIn(b"Location: /login", body)
 
     def test_openapi_requires_auth(self):
-        """GET /openapi.json without auth returns 401."""
+        """GET /openapi.json without auth redirects to /login."""
         handler = self._create_handler(path="/openapi.json")
         handler.do_GET()
         body = handler.wfile.getvalue()
-        self.assertIn(b"401", body)
+        self.assertIn(b"302", body)
+        self.assertIn(b"Location: /login", body)
 
     def test_openapi_and_docs_authenticated(self):
         """Authenticated requests to /openapi.json and /docs return JSON/HTML."""
@@ -589,11 +596,12 @@ class TestRequestHandler(unittest.TestCase):
 
 
     def test_download_system_current_requires_auth(self):
-        """GET /admin/download/system-current without auth returns 401."""
+        """GET /admin/download/system-current without auth redirects to /login."""
         handler = self._create_handler(path="/admin/download/system-current")
         handler.do_GET()
         body = handler.wfile.getvalue()
-        self.assertIn(b"401", body)
+        self.assertIn(b"302", body)
+        self.assertIn(b"Location: /login", body)
 
     def test_download_system_current_authenticated(self):
         """GET /admin/download/system-current with auth returns last 50 lines of system log."""

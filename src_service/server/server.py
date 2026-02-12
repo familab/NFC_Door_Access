@@ -1,5 +1,4 @@
 """Main HTTP server and request handler. Dispatches to public and admin routes."""
-import base64
 import json
 import socket
 import threading
@@ -14,10 +13,12 @@ from ..config import config
 from ..logging_utils import get_logger
 from ..openapi import get_openapi_spec
 
-from .state import APPLICATION_JSON, TEXT_HTML
+from .state import APPLICATION_JSON
 from . import routes_public
 from . import routes_admin
 from . import routes_metrics
+from . import routes_auth
+from .auth import send_auth_required, login_required, is_authenticated
 
 
 # Helper: generate a self-signed certificate (optional dependency: cryptography)
@@ -89,44 +90,10 @@ def _generate_self_signed_cert(cert_path: str):
         pass
 
 
-# Paths that do not require authentication
-PUBLIC_PATHS = {"/", "/health"}
 NOT_FOUND = "Not Found"
 
 
-def _check_auth(handler: BaseHTTPRequestHandler) -> bool:
-    """Check HTTP Basic Auth. Returns True if authenticated."""
-    auth_header = handler.headers.get("Authorization")
-    if not auth_header:
-        try:
-            get_logger().warning("Health server auth failed: missing Authorization header")
-        except Exception:
-            pass
-        return False
-    try:
-        auth_type, auth_data = auth_header.split(" ", 1)
-        if auth_type.lower() != "basic":
-            return False
-        decoded = base64.b64decode(auth_data).decode("utf-8")
-        username, password = decoded.split(":", 1)
-        return (
-            username == config["HEALTH_SERVER_USERNAME"]
-            and password == config["HEALTH_SERVER_PASSWORD"]
-        )
-    except Exception as e:
-        get_logger().warning(f"Auth check failed: {e}")
-        return False
-
-
-def _send_auth_required(handler: BaseHTTPRequestHandler):
-    """Send 401 Unauthorized."""
-    handler.send_response(401)
-    handler.send_header("WWW-Authenticate", 'Basic realm="Door Controller"')
-    handler.send_header("Content-type", TEXT_HTML)
-    handler.end_headers()
-    handler.wfile.write(b"<html><body><h1>401 Unauthorized</h1></body></html>")
-
-
+@login_required
 def _send_openapi_json(handler: BaseHTTPRequestHandler):
     """Send OpenAPI spec JSON (authenticated route)."""
     try:
@@ -143,7 +110,7 @@ def _send_openapi_json(handler: BaseHTTPRequestHandler):
 
 
 class RequestHandler(BaseHTTPRequestHandler):
-    """HTTP request handler: public routes without auth, all others with Basic Auth."""
+    """HTTP request handler: public routes without auth, UI routes with login, /api with auth."""
 
     def setup(self):
         super().setup()
@@ -156,14 +123,11 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
-    def _require_auth(self) -> bool:
-        """Return True if request is allowed (either public path or authenticated)."""
-        path = self.path.split("?")[0]
-        if path in PUBLIC_PATHS:
+    def _require_api_auth(self) -> bool:
+        """Return True if request is allowed for /api routes."""
+        if is_authenticated(self, allow_basic=True, allow_session=True):
             return True
-        if _check_auth(self):
-            return True
-        _send_auth_required(self)
+        send_auth_required(self)
         return False
 
     def do_GET(self):
@@ -192,7 +156,20 @@ class RequestHandler(BaseHTTPRequestHandler):
             routes_public.send_docs_page(self)
             return
 
-        if not self._require_auth():
+        if path == "/login":
+            routes_auth.send_login_page(self, raw_query)
+            return
+
+        if path == "/login/google":
+            routes_auth.handle_google_login_start(self, raw_query)
+            return
+
+        if path == "/login/google/callback":
+            routes_auth.handle_google_callback(self, raw_query)
+            return
+
+        if path == "/logout":
+            routes_auth.handle_logout(self)
             return
 
         if path == "/openapi.json":
@@ -208,6 +185,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/metrics":
+            if not self._require_api_auth():
+                return
             if routes_metrics.handle_unified_metrics_api(self, raw_query):
                 return
 
@@ -230,20 +209,24 @@ class RequestHandler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         path = parsed.path
 
+        if path == "/login":
+            routes_auth.handle_login_post(self)
+            return
+
         if path == "/api/refresh_badges":
-            if not self._require_auth():
+            if not self._require_api_auth():
                 return
             if routes_admin.handle_post_refresh_badges(self):
                 return
 
         if path == "/api/toggle":
-            if not self._require_auth():
+            if not self._require_api_auth():
                 return
             if routes_admin.handle_post_toggle(self):
                 return
 
         if path == "/api/metrics/reload":
-            if not self._require_auth():
+            if not self._require_api_auth():
                 return
             if routes_metrics.handle_metrics_reload_post(self):
                 return

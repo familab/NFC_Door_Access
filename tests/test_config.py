@@ -50,6 +50,35 @@ class TestConfig(unittest.TestCase):
             del os.environ["DOOR_HEALTH_PORT"]
             del os.environ["DOOR_METRICS_DB_PATH"]
 
+    def test_creds_file_override(self):
+        """Test that creds.json settings are loaded into config."""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
+            creds_config = {
+                "auth_whitelist_emails": ["alpha@example.com", "beta@example.com"],
+                "auth_whitelist_domains": ["*.example.org"],
+                "google_oauth_enabled": True,
+                "google_oauth_client_id": "client-id",
+                "google_oauth_client_secret": "client-secret",
+                "google_oauth_redirect_uri": "http://localhost:3667/login/google/callback",
+                "google_oauth_scopes": ["openid", "email"],
+            }
+            json.dump(creds_config, f)
+            creds_path = f.name
+
+        os.environ["DOOR_CREDS_FILE"] = creds_path
+        try:
+            config = Config()
+            self.assertEqual(config["AUTH_WHITELIST_EMAILS"], creds_config["auth_whitelist_emails"])
+            self.assertEqual(config["AUTH_WHITELIST_DOMAINS"], creds_config["auth_whitelist_domains"])
+            self.assertEqual(config["GOOGLE_OAUTH_ENABLED"], creds_config["google_oauth_enabled"])
+            self.assertEqual(config["GOOGLE_OAUTH_CLIENT_ID"], creds_config["google_oauth_client_id"])
+            self.assertEqual(config["GOOGLE_OAUTH_CLIENT_SECRET"], creds_config["google_oauth_client_secret"])
+            self.assertEqual(config["GOOGLE_OAUTH_REDIRECT_URI"], creds_config["google_oauth_redirect_uri"])
+            self.assertEqual(config["GOOGLE_OAUTH_SCOPES"], creds_config["google_oauth_scopes"])
+        finally:
+            del os.environ["DOOR_CREDS_FILE"]
+            os.unlink(creds_path)
+
     def test_get_method(self):
         """Test the get method with default values."""
         config = Config()

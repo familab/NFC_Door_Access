@@ -59,6 +59,20 @@ DEFAULT_CONFIG = {
     # Optional per-purpose log files (if not provided, derived from LOG_FILE)
     "ACTION_LOG_FILE": None,
     "WATCHDOG_LOG_FILE": None,
+
+    # Auth/session settings
+    "AUTH_SESSION_TTL_SECONDS": 8 * 60 * 60,
+    "AUTH_SESSION_COOKIE_NAME": "door_session",
+    "AUTH_WHITELIST_EMAILS": [],
+    "AUTH_WHITELIST_DOMAINS": [],
+
+    # Google OAuth2
+    "GOOGLE_OAUTH_ENABLED": False,
+    "GOOGLE_OAUTH_CLIENT_ID": "",
+    "GOOGLE_OAUTH_CLIENT_SECRET": "",
+    "GOOGLE_OAUTH_REDIRECT_URI": "",
+    "GOOGLE_OAUTH_SCOPES": ["openid", "https://www.googleapis.com/auth/userinfo.email"],
+    "GOOGLE_OAUTH_ALLOW_HTTP": False,  # Allow OAuth over HTTP (for dev/tunnels)
 }
 
 
@@ -68,14 +82,74 @@ class Config:
     def __init__(self, config_file: Optional[str] = None):
         self.config = DEFAULT_CONFIG.copy()
 
-        # Load from config file if provided
+        # Load from config file (default to config.json in current directory if not specified)
+        if config_file is None:
+            config_file = "config.json"
         if config_file and os.path.exists(config_file):
             with open(config_file, 'r') as f:
                 file_config = json.load(f)
                 self.config.update(file_config)
 
-        # Override with environment variables
+        # Override with environment variables (including CREDS_FILE path)
         self._load_from_env()
+
+        # Load optional secrets from creds.json (after env vars so CREDS_FILE path is correct)
+        self._load_from_creds()
+
+    def _load_from_creds(self):
+        """Load auth/OAuth settings from creds.json when available."""
+        creds_file = self.config.get("CREDS_FILE")
+        if not creds_file or not os.path.exists(creds_file):
+            return
+        try:
+            with open(creds_file, "r") as f:
+                creds = json.load(f)
+        except Exception:
+            return
+
+        creds_mappings = {
+            "auth_whitelist_emails": "AUTH_WHITELIST_EMAILS",
+            "auth_whitelist_domains": "AUTH_WHITELIST_DOMAINS",
+            "google_oauth_enabled": "GOOGLE_OAUTH_ENABLED",
+            "google_oauth_client_id": "GOOGLE_OAUTH_CLIENT_ID",
+            "google_oauth_client_secret": "GOOGLE_OAUTH_CLIENT_SECRET",
+            "google_oauth_redirect_uri": "GOOGLE_OAUTH_REDIRECT_URI",
+            "google_oauth_scopes": "GOOGLE_OAUTH_SCOPES",
+            "google_oauth_allow_http": "GOOGLE_OAUTH_ALLOW_HTTP",
+        }
+
+        for creds_key, config_key in creds_mappings.items():
+            value = None
+            if creds_key in creds:
+                value = creds.get(creds_key)
+            else:
+                upper_key = creds_key.upper()
+                value = creds.get(upper_key)
+            if value is None:
+                continue
+            if isinstance(self.config.get(config_key), bool):
+                if isinstance(value, bool):
+                    self.config[config_key] = value
+                elif isinstance(value, str):
+                    self.config[config_key] = value.lower() in ("true", "1", "yes", "on")
+                else:
+                    self.config[config_key] = bool(value)
+            elif isinstance(self.config.get(config_key), int):
+                try:
+                    self.config[config_key] = int(value)
+                except Exception:
+                    continue
+            elif isinstance(self.config.get(config_key), (list, dict)):
+                if isinstance(value, str):
+                    try:
+                        self.config[config_key] = json.loads(value)
+                    except Exception:
+                        items = [v.strip() for v in value.replace(",", ";").split(";") if v.strip()]
+                        self.config[config_key] = items
+                else:
+                    self.config[config_key] = value
+            else:
+                self.config[config_key] = value
 
     def _load_from_env(self):
         """Load configuration from environment variables."""
@@ -96,14 +170,31 @@ class Config:
             "DOOR_HEALTH_CERT_FILE": "HEALTH_SERVER_CERT_FILE",
             "DOOR_ACTION_LOG_FILE": "ACTION_LOG_FILE",
             "DOOR_WATCHDOG_LOG_FILE": "WATCHDOG_LOG_FILE",
+            "DOOR_AUTH_SESSION_TTL_SECONDS": "AUTH_SESSION_TTL_SECONDS",
+            "DOOR_AUTH_SESSION_COOKIE_NAME": "AUTH_SESSION_COOKIE_NAME",
+            "DOOR_AUTH_WHITELIST_EMAILS": "AUTH_WHITELIST_EMAILS",
+            "DOOR_AUTH_WHITELIST_DOMAINS": "AUTH_WHITELIST_DOMAINS",
+            "DOOR_GOOGLE_OAUTH_ENABLED": "GOOGLE_OAUTH_ENABLED",
+            "DOOR_GOOGLE_OAUTH_CLIENT_ID": "GOOGLE_OAUTH_CLIENT_ID",
+            "DOOR_GOOGLE_OAUTH_CLIENT_SECRET": "GOOGLE_OAUTH_CLIENT_SECRET",
+            "DOOR_GOOGLE_OAUTH_REDIRECT_URI": "GOOGLE_OAUTH_REDIRECT_URI",
+            "DOOR_GOOGLE_OAUTH_SCOPES": "GOOGLE_OAUTH_SCOPES",
         }
 
         for env_key, config_key in env_mappings.items():
             value = os.environ.get(env_key)
             if value is not None:
                 # Convert to appropriate type
-                if isinstance(self.config[config_key], int):
+                if isinstance(self.config[config_key], bool):
+                    self.config[config_key] = value.lower() in ("true", "1", "yes", "on")
+                elif isinstance(self.config[config_key], int):
                     self.config[config_key] = int(value)
+                elif isinstance(self.config[config_key], (list, dict)):
+                    try:
+                        self.config[config_key] = json.loads(value)
+                    except Exception:
+                        items = [v.strip() for v in value.replace(",", ";").split(";") if v.strip()]
+                        self.config[config_key] = items
                 else:
                     self.config[config_key] = value
 

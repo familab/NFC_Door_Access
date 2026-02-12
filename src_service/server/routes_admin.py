@@ -41,10 +41,20 @@ import re
 from io import BytesIO
 from zipfile import ZipFile
 from .helpers import get_host_header, get_client_addr, get_public_ip
+from .auth import login_required, get_current_user
 
 
+@login_required
 def send_admin_page(handler):
     """Send admin dashboard: health data + last 50 system log lines + last 50 action log lines + refresh buttons."""
+    # Get current user info
+    user_info = get_current_user(handler)
+    user_display = ""
+    if user_info and user_info.get("email"):
+        auth_method = user_info.get("auth_method", "")
+        if auth_method == "google_oauth":
+            user_display = f" ({user_info['email']})"
+
     door_status = "OPEN/UNLOCKED" if get_door_status() else "CLOSED/LOCKED"
     door_updated = format_timestamp(get_door_status_updated())
     last_google_log = format_timestamp(get_last_google_log_success())
@@ -120,7 +130,7 @@ def send_admin_page(handler):
 </head>
 <body>
     <h1>Admin Dashboard</h1>
-    <p class="timestamp">Version: {__version__} &nbsp;|&nbsp; <a href="/health">Health</a> &nbsp;|&nbsp; <a href="/docs">Docs</a> &nbsp;|&nbsp; <a href="/metrics">Metrics</a></p>
+    <p class="timestamp">Version: {__version__} &nbsp;|&nbsp; <a href="/health">Health</a> &nbsp;|&nbsp; <a href="/docs">Docs</a> &nbsp;|&nbsp; <a href="/metrics">Metrics</a> &nbsp;|&nbsp; <a href="/logout">Logout</a>{user_display}</p>
     <p class="timestamp">Machine: {socket.gethostname()} &nbsp; Local IPs: {', '.join(get_local_ips()) or 'None'}</p>
     <p class="timestamp">
         Auto-refresh: {refresh_interval}s &nbsp; Next refresh in <span id="adminRefreshCountdown">{refresh_interval}</span>s
@@ -369,9 +379,12 @@ def handle_post_toggle(handler) -> bool:
     host_header = get_host_header(handler)
     client_addr = get_client_addr(handler)
     public_ip = get_public_ip(handler)
+    user_info = get_current_user(handler)
 
-    # Build a structured badge_id string for auditing: include host, client, and public IP where available
+    # Build a structured badge_id string for auditing: include host, client, public IP, and user email
     parts = []
+    if user_info and user_info.get("email") and user_info.get("auth_method") == "google_oauth":
+        parts.append(f"user={user_info['email']}")
     if host_header:
         parts.append(f"host={host_header}")
     if client_addr:
@@ -424,6 +437,7 @@ def handle_post_toggle(handler) -> bool:
 
 
 
+@login_required
 def handle_download(handler, path: str) -> bool:
     """Handle GET /admin/download/<kind>. Returns True if handled."""
     # path is e.g. /admin/download/system-current

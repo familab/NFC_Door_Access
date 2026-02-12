@@ -29,6 +29,7 @@ Credentials:
 - [Optimizations](docs/optimizations.md)
 - [Data Schema](docs/data-schema.md)
 - [Metrics](docs/metrics.md)
+- [Single Sign-On Setup](docs/single_sign_on.md)
 
 
 ## Table of Contents

@@ -7,6 +7,7 @@ from urllib.parse import parse_qs
 from ..metrics_storage import query_events_range, month_events_to_csv
 from .state import APPLICATION_JSON, check_rate_limit_metrics_reload, get_seconds_until_next_metrics_reload
 from ..logging_utils import get_logger
+from .auth import login_required, get_current_user
 
 
 def _parse_date(value: str, default_value: date) -> date:
@@ -122,8 +123,17 @@ def handle_unified_metrics_api(handler, raw_query: str) -> bool:
         return True
 
 
+@login_required
 def send_metrics_page(handler, raw_query: str):
     """Metrics dashboard with IndexedDB caching and client-side graphing."""
+
+    # Get current user for display
+    user_info = get_current_user(handler)
+    user_display = ""
+    if user_info and user_info.get("email"):
+        auth_method = user_info.get("auth_method", "")
+        if auth_method == "google_oauth":
+            user_display = f" ({user_info['email']})"
 
     # Parse URL params for initial date range
     query = _query_parts(raw_query)
@@ -182,7 +192,7 @@ def send_metrics_page(handler, raw_query: str):
 </head>
 <body>
   <h1>Door Metrics</h1>
-  <p><a href="/admin">← Admin</a> | <a href="/docs">API Docs</a></p>
+  <p><a href="/admin">← Admin</a> | <a href="/docs">API Docs</a> | <a href="/logout">Logout</a>{user_display}</p>
 
   <div id="status" class="status loading">Initializing...</div>
 

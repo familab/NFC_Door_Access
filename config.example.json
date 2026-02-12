@@ -1,0 +1,20 @@
+{
+    "AUTH_SESSION_TTL_SECONDS": 28800,
+    "AUTH_SESSION_COOKIE_NAME": "door_session",
+    "AUTH_WHITELIST_EMAILS": [
+        "test@gmail.com",
+        "bob@gmail.com"
+    ],
+    "AUTH_WHITELIST_DOMAINS": [
+        "*.domain.com"
+    ],
+    "GOOGLE_OAUTH_ENABLED": false,
+    "GOOGLE_OAUTH_CLIENT_ID": "YOUR_GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET": "YOUR_GOOGLE_OAUTH_CLIENT_SECRET",
+    "GOOGLE_OAUTH_REDIRECT_URI": "http://localhost:3667/login/google/callback",
+    "GOOGLE_OAUTH_SCOPES": [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email"
+    ],
+    "GOOGLE_OAUTH_ALLOW_HTTP": true
+}
