@@ -10,7 +10,6 @@ User=pi
 # Group=gpio
 WorkingDirectory=/home/pi/badge_scanner
 Environment=PYTHONUNBUFFERED=1
-Environment=DOOR_HEALTH_PORT=3264
 # Ensure /tmp exists and write initial watchdog heartbeat (tolerate failure)
 ExecStartPre=/bin/sh -c 'mkdir -p /tmp && echo "0" > /tmp/door_controller_watchdog.txt || true'
 # Verify Python in virtualenv is executable

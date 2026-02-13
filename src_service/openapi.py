@@ -113,6 +113,29 @@ def get_openapi_spec(host: Optional[str] = None) -> Dict:
                     },
                     "security": [{"basicAuth": []}]
                 }
+            },
+            "/api/version": {
+                "get": {
+                    "summary": "Get application version",
+                    "description": "Return the current application version. Requires Basic Auth.",
+                    "responses": {
+                        "200": {
+                            "description": "Current application version (JSON)",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "version": {"type": "string"}
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "401": {"description": "Unauthorized"}
+                    },
+                    "security": [{"basicAuth": []}]
+                }
             }
         }
     }

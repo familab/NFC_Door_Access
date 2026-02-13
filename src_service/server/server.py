@@ -95,11 +95,47 @@ NOT_FOUND = "Not Found"
 
 @login_required
 def _send_openapi_json(handler: BaseHTTPRequestHandler):
-    """Send OpenAPI spec JSON (authenticated route)."""
+    """Send OpenAPI spec JSON (authenticated route).
+
+    Determine request scheme (https/http) from common signals so the generated
+    OpenAPI `servers` URL uses the same scheme as the incoming request. This
+    helps avoid CORS/Swagger UI mixed-content problems when the health server
+    sits behind a reverse proxy.
+
+    Detection order:
+    1. `X-Forwarded-Proto` header (if set by a proxy)
+    2. Whether the underlying socket is an `ssl.SSLSocket`
+    3. Fallback to `http`
+    """
     try:
         host_header = handler.headers.get("Host")
-        get_logger().debug(f"OpenAPI request Host header: {host_header!r}")
-        spec = get_openapi_spec(host=host_header)
+        # Prefer explicit proxy header if present
+        proto_hdr = None
+        try:
+            proto_hdr = handler.headers.get("X-Forwarded-Proto")
+        except Exception:
+            proto_hdr = None
+
+        scheme = None
+        if proto_hdr:
+            scheme = proto_hdr.split(",", 1)[0].strip().lower()
+        else:
+            # If the request socket is SSL/TLS-wrapped, treat as https
+            try:
+                scheme = "https" if isinstance(handler.request, ssl.SSLSocket) else "http"
+            except Exception:
+                scheme = "http"
+
+        # Construct a host value that includes the scheme so get_openapi_spec
+        # preserves the correct protocol in the generated `servers` entry.
+        host_for_spec = None
+        if host_header:
+            host_for_spec = f"{scheme}://{host_header}"
+        else:
+            host_for_spec = None
+
+        get_logger().debug(f"OpenAPI request Host header: {host_header!r} proto={scheme!r}")
+        spec = get_openapi_spec(host=host_for_spec)
         handler.send_response(200)
         handler.send_header("Content-type", APPLICATION_JSON)
         handler.end_headers()
@@ -189,6 +225,20 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             if routes_metrics.handle_unified_metrics_api(self, raw_query):
                 return
+
+        # Authenticated API: return current application version
+        if path == "/api/version":
+            if not self._require_api_auth():
+                return
+            try:
+                from ..version import __version__
+            except Exception:
+                __version__ = "unknown"
+            self.send_response(200)
+            self.send_header("Content-type", APPLICATION_JSON)
+            self.end_headers()
+            self.wfile.write(json.dumps({"version": __version__}).encode("utf-8"))
+            return
 
         if path.startswith("/admin/download/"):
             if routes_admin.handle_download(self, path):

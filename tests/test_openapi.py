@@ -22,6 +22,13 @@ class TestOpenAPISpec(unittest.TestCase):
         # Unified metrics endpoint and reload
         self.assertIn("/api/metrics", paths)
         self.assertIn("/api/metrics/reload", paths)
+        # Version endpoint
+        self.assertIn("/api/version", paths)
+        # Ensure response schema contains 'version' property
+        ver_resp = paths["/api/version"]["get"]["responses"]["200"]
+        self.assertIn("application/json", ver_resp.get("content", {}))
+        schema = ver_resp["content"]["application/json"]["schema"]
+        self.assertIn("version", schema.get("properties", {}))
 
 if __name__ == '__main__':
     unittest.main()

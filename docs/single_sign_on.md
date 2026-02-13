@@ -88,7 +88,7 @@ Add the following fields to your `creds.json` file:
   "google_oauth_client_id": "YOUR_CLIENT_ID_HERE.apps.googleusercontent.com",
   "google_oauth_client_secret": "YOUR_CLIENT_SECRET_HERE",
   "google_oauth_redirect_uri": "http://localhost:3667/login/google/callback",
-  "google_oauth_scopes": ["openid", "email"],
+  "google_oauth_scopes": ["openid", "https://www.googleapis.com/auth/userinfo.email"],
   "google_oauth_allow_http": true,
   "auth_whitelist_emails": ["user1@gmail.com", "user2@example.com"],
   "auth_whitelist_domains": ["*.yourorg.com"]
@@ -110,8 +110,8 @@ export DOOR_GOOGLE_OAUTH_CLIENT_ID="YOUR_CLIENT_ID_HERE.apps.googleusercontent.c
 export DOOR_GOOGLE_OAUTH_CLIENT_SECRET="YOUR_CLIENT_SECRET_HERE"
 export DOOR_GOOGLE_OAUTH_REDIRECT_URI="http://localhost:3667/login/google/callback"
 
-# Optional: Custom scopes (defaults to openid, email)
-export DOOR_GOOGLE_OAUTH_SCOPES='["openid", "email", "profile"]'
+# Optional: Custom scopes (defaults to openid, https://www.googleapis.com/auth/userinfo.email)
+export DOOR_GOOGLE_OAUTH_SCOPES='["openid", "https://www.googleapis.com/auth/userinfo.email"]'
 
 # Allow OAuth over HTTP (for local dev or tunnels)
 export DOOR_GOOGLE_OAUTH_ALLOW_HTTP=true
@@ -131,6 +131,7 @@ Create or update `config.json` in the project root (use `config.example.json` as
   "GOOGLE_OAUTH_CLIENT_ID": "YOUR_CLIENT_ID_HERE.apps.googleusercontent.com",
   "GOOGLE_OAUTH_CLIENT_SECRET": "YOUR_CLIENT_SECRET_HERE",
   "GOOGLE_OAUTH_REDIRECT_URI": "http://localhost:3667/login/google/callback",
+  "GOOGLE_OAUTH_SCOPES": ["openid", "https://www.googleapis.com/auth/userinfo.email"],
   "GOOGLE_OAUTH_ALLOW_HTTP": true,
   "AUTH_WHITELIST_EMAILS": ["user1@gmail.com", "user2@example.com"],
   "AUTH_WHITELIST_DOMAINS": ["*.yourorg.com"]

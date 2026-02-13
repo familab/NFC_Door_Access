@@ -28,5 +28,9 @@ xmlrunner==1.7.7
 
 # Standard library enhancements (Python compatibility)
 typing-extensions==4.15.0
+# required for google auth
 cryptography>=38.0.0
+# required for ssl generation better to do locally and copy cert
+# cryptography==3.3.2
+
 

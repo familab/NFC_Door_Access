@@ -441,6 +441,8 @@ Create `config.json` to override defaults:
 - **Watchdog thread**: Heartbeat updates (daemon)
 
 ## Troubleshooting
+* install crypto binary
+* `sudo apt install python3-cryptography`
 
 ### Service won't start
 

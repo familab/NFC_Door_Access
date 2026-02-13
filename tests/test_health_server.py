@@ -304,6 +304,36 @@ class TestRequestHandler(unittest.TestCase):
         body2 = handler2.wfile.getvalue()
         self.assertIn(b"SwaggerUIBundle", body2)
 
+    def test_openapi_respects_x_forwarded_proto(self):
+        """If X-Forwarded-Proto is set the OpenAPI servers URL uses that scheme."""
+        import base64
+        credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
+        auth_header = f"Basic {credentials}"
+        handler = self._create_handler(auth_header=auth_header, path="/openapi.json")
+        handler.headers["Host"] = "example.local:8443"
+        handler.headers["X-Forwarded-Proto"] = "https"
+        handler.do_GET()
+        body = handler.wfile.getvalue()
+        self.assertIn(b'"servers"', body)
+        self.assertIn(b"https://example.local:8443", body)
+
+    def test_openapi_detects_tls_socket(self):
+        """If the request socket is SSL-wrapped, OpenAPI servers URL uses https."""
+        import base64, ssl
+        credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
+        auth_header = f"Basic {credentials}"
+        handler = self._create_handler(auth_header=auth_header, path="/openapi.json")
+        handler.headers["Host"] = "local:443"
+        # Patch ssl.SSLSocket to a simple class so isinstance(handler.request, ssl.SSLSocket)
+        # evaluates to True for our fake request object.
+        class _FakeSSLSocket:
+            pass
+        with patch.object(ssl, 'SSLSocket', _FakeSSLSocket):
+            handler.request = _FakeSSLSocket()
+            handler.do_GET()
+            body = handler.wfile.getvalue()
+            self.assertIn(b"https://local:443", body)
+
     def test_admin_page_authenticated(self):
         """GET /admin with auth returns admin dashboard with log lines and refresh buttons."""
         credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
@@ -594,6 +624,26 @@ class TestRequestHandler(unittest.TestCase):
         self.assertIn(b"200", body)
         self.assertIn(b"ts,event_type,badge_id,status,raw_message", body)
 
+    def test_get_api_version_requires_auth(self):
+        """GET /api/version without auth returns 401."""
+        handler = self._create_handler(path="/api/version")
+        handler.do_GET()
+        body = handler.wfile.getvalue()
+        self.assertIn(b"401", body)
+
+    def test_get_api_version_returns_version(self):
+        """GET /api/version with basic auth returns JSON version."""
+        import base64
+        from src_service.version import __version__
+
+        credentials = base64.b64encode(b"testuser:testpass").decode("ascii")
+        auth_header = f"Basic {credentials}"
+        handler = self._create_handler(auth_header=auth_header, path="/api/version")
+        handler.do_GET()
+        body = handler.wfile.getvalue()
+        self.assertIn(b"200", body)
+        self.assertIn(b'"version"', body)
+        self.assertIn(__version__.encode("utf-8"), body)
 
     def test_download_system_current_requires_auth(self):
         """GET /admin/download/system-current without auth redirects to /login."""
