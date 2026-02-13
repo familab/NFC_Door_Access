@@ -188,6 +188,14 @@ def send_metrics_page(handler, raw_query: str):
     .card.full-row {{ grid-column: 1 / -1; }}
     .hourly-heatmap-scroll {{ max-height: 520px; overflow: auto; }}
     .heatmap-controls {{ margin-bottom: 6px; display:flex; gap:8px; align-items:center; }}
+
+    /* Modal for heatmap cell details */
+    .modal-overlay {{ position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 9999; }}
+    .modal-overlay.show {{ display: flex; }}
+    .modal-content {{ background: #252526; color: #d4d4d4; padding: 16px; border-radius: 8px; max-width: 900px; width: 95%; max-height: 80vh; overflow: auto; border:1px solid #555; position: relative; }}
+    .modal-close {{ position: absolute; right: 12px; top: 12px; background: #4ec9b0; border: none; padding:4px 8px; cursor:pointer; border-radius:4px; color:#1e1e1e; }}
+    .heatmap-cell {{ cursor: pointer; }}
+    .heatmap-cell:hover {{ outline: 2px solid rgba(78,201,176,0.25); }}
   </style>
 </head>
 <body>
@@ -603,7 +611,35 @@ function renderTopBadgeUsers(events) {{
   const labels = sorted.map(x => x[0]);
   const data = sorted.map(x => x[1]);
 
+  // Create chart as before
   createChart('top-users', 'Top 10 Badge Users', 'bar', labels, data);
+
+  // Make bars/labels clickable so user can copy badge id to clipboard
+  try {{
+    const canvas = document.getElementById('chart-top-users');
+    const chartObj = charts['top-users'];
+    if (canvas && chartObj) {{
+      canvas.style.cursor = 'pointer';
+      canvas.onclick = async (evt) => {{
+        try {{
+          // Use Chart.js helper to find the nearest item under the click
+          const items = chartObj.getElementsAtEventForMode(evt, 'nearest', {{ intersect: true }}, true);
+          if (!items || !items.length) return;
+          const idx = items[0].index;
+          const label = chartObj.data.labels[idx];
+          if (!label) return;
+          // Try clipboard API, fall back to prompt for older browsers
+          try {{
+            await navigator.clipboard.writeText(label);
+            updateStatus(`Copied "${{label}}" to clipboard`, 'cached');
+          }} catch (e) {{
+            // Fallback: show the value in a prompt so user can copy manually
+            prompt('Badge ID (copy from here):', label);
+          }}
+        }} catch (e) {{ console.error('copy-on-click failed', e); }}
+      }};
+    }}
+  }} catch (e) {{ /* ignore errors */ }}
 }}
 
 // Door cycles per day
@@ -778,15 +814,73 @@ function renderHourlyHeatmap(events) {{
       const v = byDayHour[d][h] || 0;
       const intensity = maxCount ? Math.round((v/maxCount)*200) : 0;
       const color = `rgba(78,201,176,${{0.05 + (intensity/255)}})`;
-      row += `<td style="background:${{color}}; text-align:center;">${{v || ''}}</td>`;
+      const cls = v ? 'heatmap-cell' : '';
+      row += `<td class="${{cls}}" data-day="${{d}}" data-hour="${{h}}" title="${{v}} event${{v === 1 ? '' : 's'}}" style="background:${{color}}; text-align:center; cursor:${{v ? 'pointer' : 'default'}};">${{v || ''}}</td>`;
     }}
     row += `</tr>`;
     tbody.innerHTML += row;
   }});
 
+  // Attach click handlers for cells (delegation could be used but table is rebuilt each render)
+  tbody.querySelectorAll('td.heatmap-cell').forEach(td => {{
+    td.addEventListener('click', (ev) => {{
+      const day = td.getAttribute('data-day');
+      const hour = parseInt(td.getAttribute('data-hour'), 10);
+      openHeatmapModal(day, hour);
+    }});
+  }});
+
   // Ensure scroll container scrolls to top
   const scroller = document.getElementById(`heat-scroll-${{id}}`);
   if (scroller) scroller.scrollTop = 0;
+}}
+
+// Create modal overlay (lazy)
+function createHeatmapModal() {{
+  if (document.getElementById('heatmapModal')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'heatmapModal';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal-content"><button class="modal-close" id="heatmapModalClose">Close</button><div id="heatmapModalBody"></div></div>`;
+  overlay.addEventListener('click', (e) => {{ if (e.target === overlay) closeHeatmapModal(); }});
+  document.body.appendChild(overlay);
+  document.getElementById('heatmapModalClose').addEventListener('click', closeHeatmapModal);
+}}
+
+// Open modal and populate with events for the selected day/hour
+function openHeatmapModal(day, hour) {{
+  createHeatmapModal();
+  const overlay = document.getElementById('heatmapModal');
+  const body = document.getElementById('heatmapModalBody');
+  const evs = (latestEvents || []).filter(e => e.ts.startsWith(day) && new Date(e.ts).getHours() === hour);
+  let html = `<h3>Events for ${{day}} @ ${{hour}}:00 (${{evs.length}})</h3>`;
+  if (!evs.length) {{ html += `<p>No events</p>`; }} else {{
+    html += `<table><thead><tr><th>Time</th><th>Event</th><th>Badge</th><th>Status</th></tr></thead><tbody>`;
+    evs.forEach(e => {{
+      const badge = e.badge_id || '';
+      const badgeDisplay = badge ? `<span class="badge-copy" data-badge="${{badge}}" style="color:#9cdcfe;cursor:pointer;">${{badge}}</span>` : '';
+      html += `<tr><td>${{e.ts.split(' ')[1]}}</td><td>${{e.event_type}}</td><td>${{badgeDisplay}}</td><td>${{e.status || ''}}</td></tr>`;
+    }});
+    html += `</tbody></table>`;
+    html += `<p style="margin-top:8px;"><small>Click a badge to copy its id</small></p>`;
+  }}
+  body.innerHTML = html;
+
+  // attach copy handlers
+  const clips = body.querySelectorAll('.badge-copy');
+  clips.forEach(el => {{
+    el.addEventListener('click', async (ev) => {{
+      const b = el.getAttribute('data-badge');
+      try {{ await navigator.clipboard.writeText(b); updateStatus(`Copied "${{b}}" to clipboard`, 'cached'); }} catch (err) {{ prompt('Badge ID (copy):', b); }}
+    }});
+  }});
+
+  overlay.classList.add('show');
+}}
+
+function closeHeatmapModal() {{
+  const overlay = document.getElementById('heatmapModal');
+  if (overlay) overlay.classList.remove('show');
 }}
 
 // Histogram helper (bins numeric array into N bins)
