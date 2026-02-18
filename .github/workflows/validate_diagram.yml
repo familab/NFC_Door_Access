@@ -38,6 +38,7 @@ jobs:
         run: |
           python diagram/scripts/import_device_configs.py --force --patch-schemas
 # --validate-devices
+
       - name: Run PinViz validate (save output)
         run: |
           set +e
