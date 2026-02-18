@@ -1,4 +1,4 @@
-workflow: TrunkBased/preview1
+workflow: GitHubFlow/v1
 
 mode: ContinuousDelivery
 assembly-versioning-scheme: MajorMinorPatch
