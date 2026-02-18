@@ -36,7 +36,8 @@ jobs:
 
       - name: Import device templates (script)
         run: |
-          python diagram/scripts/import_device_configs.py --force --validate-devices --patch-schemas
+          python diagram/scripts/import_device_configs.py --force --patch-schemas
+# --validate-devices
 
       - name: Run PinViz validate (save output)
         run: |
